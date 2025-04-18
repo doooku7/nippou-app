@@ -1,84 +1,164 @@
-// firebase-admin SDKをインポート (Firestore操作に必要)
+// api/v1/reports.js (プッシュ通知送信機能付き)
 const admin = require('firebase-admin');
+const webpush = require('web-push'); // ★ web-pushライブラリをインポート
 
-// ★★★ Firestoreサービスアカウントキーの読み込みと初期化 ★★★
-// 環境変数からサービスアカウント情報を取得
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '{}');
-
-// Admin SDKが初期化されていない場合のみ初期化
-if (!admin.apps.length) {
-  try {
+// --- Firebase Admin SDK Initialization ---
+// (変更なし、ただしエラー時はスローするように調整)
+try {
+  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '{}');
+  if (!admin.apps.length) {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
     });
-  } catch (e) {
-    console.error('Firebase Admin Initialization Error', e);
+    console.log("Firebase Admin SDK Initialized Successfully (from reports)!");
+  } else {
+    console.log("Firebase Admin SDK Already Initialized (from reports).");
   }
+} catch (e) {
+  console.error('Firebase Admin Initialization Error (from reports):', e);
+  // 初期化失敗は致命的なのでエラーをスローして Vercel に知らせる
+  throw new Error('Firebase Admin SDK Initialization Failed');
 }
+const db = admin.firestore();
 
-const db = admin.firestore(); // Firestoreデータベースへの参照を取得
+// ★★★ VAPID キーの設定 ★★★
+try {
+  const vapidSubject = process.env.VAPID_SUBJECT;
+  const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
+  const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
 
-// Vercelサーバーレス関数のエントリーポイント
+  // 環境変数がすべてセットされているか確認
+  if (!vapidSubject || !vapidPublicKey || !vapidPrivateKey) {
+    console.error('VAPID environment variables are not fully set. Push notifications disabled.');
+    // VAPIDキーがない場合はプッシュ通知を試行しないようにする
+  } else {
+    webpush.setVapidDetails(
+      vapidSubject,
+      vapidPublicKey,
+      vapidPrivateKey
+    );
+    console.log("Web Push VAPID details configured.");
+  }
+} catch(e) {
+  console.error("Error configuring VAPID details", e);
+  // VAPID設定エラーの場合もプッシュ通知は送られない
+}
+// ★★★ ここまで追加 ★★★
+
+
+// --- API Endpoint Logic ---
 module.exports = async (req, res) => {
-  // 1. HTTPメソッドがPOSTかチェック
+  if (!db) {
+    console.error('Firestore DB instance is not available (reports).');
+    return res.status(500).json({ error: 'サーバー設定エラーが発生しました (DB Init Failed)。' });
+  }
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
     return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
   }
-
-  // 2. 認証: APIキーをヘッダーから取得して検証
   const providedApiKey = req.headers['x-api-key'];
-  const expectedApiKey = process.env.EXPECTED_API_KEY; // Vercelの環境変数から読み込む
-
+  const expectedApiKey = process.env.EXPECTED_API_KEY;
   if (!providedApiKey || providedApiKey !== expectedApiKey) {
-    // APIキーが違う場合は401 Unauthorizedエラーを返す
     return res.status(401).json({ error: '認証に失敗しました。APIキーが無効です。' });
   }
 
-  try {
-    // 3. リクエストボディ (JSON) を取得
-    // Vercelでは通常自動でパースされるが、エラーハンドリングはあっても良い
-    const reportData = req.body;
+  let savedReportId = null;
 
-    // 4. データ検証 (バリデーション) ★★★ ここに詳細なチェック処理を追加 ★★★
-    console.log('Received data:', reportData); // まずは受け取ったデータをログに出力してみる
-    // 例: 必須項目チェック
-    if (!reportData || !reportData.report_date || !reportData.store_name /* ...など */) {
-      console.error('Validation Error: Missing required fields');
+  try {
+    const reportData = req.body;
+    console.log('Received report data:', reportData);
+
+    // --- Basic Validation (省略) ---
+    if (!reportData || !reportData.report_date || !reportData.store_name /* ... */) {
+      console.error('Validation Error: Missing required fields in report data');
       return res.status(400).json({ error: '必須項目が不足しています。' });
     }
-    // ここに、データ型、日付形式、数値範囲などのチェックを追加していく
 
-    // 5. Firestoreにデータを保存する準備
+    // --- Prepare Data for Firestore (省略) ---
     const reportPayload = {
       report_date: reportData.report_date,
       store_name: reportData.store_name,
-      sales_amount: Number(reportData.sales_amount) || 0, // 数値に変換 (失敗したら0)
+      sales_amount: Number(reportData.sales_amount) || 0,
       daily_target_amount: Number(reportData.daily_target_amount) || 0,
       visitor_count: Number(reportData.visitor_count) || 0,
       new_customer_count: Number(reportData.new_customer_count) || 0,
       dye_customer_count: Number(reportData.dye_customer_count) || 0,
-      comment: reportData.comment || null, // なければnull
+      comment: reportData.comment || null,
       monthly_target_amount: Number(reportData.monthly_target_amount) || 0,
-      // createdAtはFirestoreのサーバータイムスタンプ機能で自動設定
       createdAt: admin.firestore.FieldValue.serverTimestamp()
     };
 
-    // 6. Firestoreにデータを追加
+    // --- Save Report to Firestore ---
     const docRef = await db.collection('reports').add(reportPayload);
-    console.log('Document written with ID: ', docRef.id); // ログに記録
+    savedReportId = docRef.id;
+    console.log('Report document written with ID: ', savedReportId);
 
-    // 7. 成功レスポンスを返す
-    return res.status(201).json({ message: '日報を受け付けました', reportId: docRef.id });
+    // ★★★ プッシュ通知送信処理を追加 ★★★
+    console.log('Attempting to send push notifications...');
+    // VAPIDキーが設定されている場合のみ実行
+    if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY && process.env.VAPID_SUBJECT) {
+        const subscriptionsSnapshot = await db.collection('pushSubscriptions').get();
+
+        if (subscriptionsSnapshot.empty) {
+          console.log('No push subscriptions found.');
+        } else {
+          console.log(`Found ${subscriptionsSnapshot.size} subscriptions. Preparing to send...`);
+
+          // 通知ペイロード（通知内容）を作成
+          // TODO: 月次集計結果なども含める
+          const notificationPayload = JSON.stringify({
+            title: `[${reportPayload.store_name}] 新しい日報`,
+            body: `売上: ${reportPayload.sales_amount.toLocaleString()}円 (日次目標: ${reportPayload.daily_target_amount.toLocaleString()}円)`,
+            // icon: '/icon.png', // アイコンも指定できる
+            // data: { url: '/some-report-url' } // 通知クリック時の遷移先など
+          });
+
+          const sendPromises = []; // 各通知送信のPromiseを格納する配列
+          subscriptionsSnapshot.forEach(doc => {
+            const subscriptionRecord = doc.data();
+            if (subscriptionRecord.subscription && subscriptionRecord.subscription.endpoint) {
+              console.log(`Sending notification to endpoint starting with: ${subscriptionRecord.subscription.endpoint.substring(0, 40)}...`);
+
+              // webpush.sendNotification は Promise を返す
+              const pushPromise = webpush.sendNotification(
+                subscriptionRecord.subscription, // 保存されている購読情報オブジェクト
+                notificationPayload // 通知内容
+              ).catch(err => {
+                // 送信エラー処理
+                console.error(`Failed to send notification to ${subscriptionRecord.subscription.endpoint.substring(0, 40)}... Error: ${err.statusCode} ${err.message}`);
+                // エラーが 404 or 410 なら、購読が無効になっているのでFirestoreから削除
+                if (err.statusCode === 404 || err.statusCode === 410) {
+                  console.log(`Deleting expired/invalid subscription: ${doc.id}`);
+                  return doc.ref.delete(); // 削除処理 (これもPromise)
+                }
+                // 他のエラーはログに残すだけ（リトライなどはここではしない）
+              });
+              sendPromises.push(pushPromise); // Promiseを配列に追加
+
+            } else {
+               console.warn(`Subscription document ${doc.id} is invalid.`);
+            }
+          });
+
+          // 全ての通知送信（と削除）の試行が終わるのを待つ
+          const results = await Promise.allSettled(sendPromises);
+          console.log('Push notification sending results:', results.map(r => r.status)); // 結果のステータスだけログ出力
+        }
+    } else {
+        console.warn('VAPID keys not configured, skipping push notifications.');
+    }
+    // ★★★ ここまで追加 ★★★
+
+    // --- Return Success Response ---
+    // プッシュ通知の成否に関わらず、日報の保存が成功したら201を返す
+    return res.status(201).json({ message: '日報を受け付け、通知送信処理を試みました。', reportId: savedReportId });
 
   } catch (error) {
-    // 8. エラーハンドリング
-    console.error('Error processing report:', error); // エラー内容をサーバーログに記録
-    // JSONパースエラーなどのクライアント起因エラーも考慮
+    // --- Error Handling ---
+    console.error('Error processing report request:', error);
     if (error instanceof SyntaxError && error.message.includes('JSON')) {
         return res.status(400).json({ error: 'リクエストボディのJSON形式が不正です。' });
     }
-    // その他の予期せぬエラー
     return res.status(500).json({ error: 'サーバー内部でエラーが発生しました。' });
   }
 };
