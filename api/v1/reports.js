@@ -23,14 +23,12 @@ try {
 }
 const db = admin.firestore(); // Get DB instance after successful init
 
-// Helper function to get month start/end in UTC for Firestore Timestamps
+// Helper function to get month start/end in UTC
 function getMonthDateRangeUTC(now = new Date()) {
     const year = now.getUTCFullYear();
     const month = now.getUTCMonth(); // 0-11
-    const startDate = new Date(Date.UTC(year, month, 1, 0, 0, 0, 0)); // 月の初日 (UTC)
-    const endDate = new Date(Date.UTC(year, month + 1, 1, 0, 0, 0, 0)); // 次の月の初日 (UTC)
-    // 日本時間に注意: FirestoreのTimestampはUTC基準ですが、日付での集計は運用に合わせて調整が必要な場合もあります。
-    // 今回は createdAt (UTC) で当月かどうかを判定します。
+    const startDate = new Date(Date.UTC(year, month, 1, 0, 0, 0, 0));
+    const endDate = new Date(Date.UTC(year, month + 1, 1, 0, 0, 0, 0));
     console.log(`[Date Range] Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`);
     return { startDate, endDate };
 }
@@ -38,19 +36,15 @@ function getMonthDateRangeUTC(now = new Date()) {
 
 // --- API Endpoint Logic ---
 module.exports = async (req, res) => {
-  // --- DB Init Check ---
-  if (!db) {
-    console.error('Firestore DB instance is not available (reports handler).');
-    return res.status(500).json({ error: 'サーバー設定エラー (DB Init Failed)。' });
-  }
+  if (!db) { console.error('Firestore DB instance is not available (reports handler).'); return res.status(500).json({ error: 'サーバー設定エラー (DB Init Failed)。' }); }
 
   // ============ REQUEST METHOD ROUTING ============
   if (req.method === 'GET') {
       // --- Handle GET Request (Fetch Reports + Calculate Monthly Summary) ---
       console.log('[GET /api/v1/reports] Received request');
       try {
-          // --- Fetch Recent Reports (for list display) ---
-          const limit = 50; // 最近のレポート取得件数
+          // --- Fetch Recent Reports ---
+          const limit = 50;
           const recentReportsSnapshot = await db.collection('reports')
                                           .orderBy('createdAt', 'desc')
                                           .limit(limit)
@@ -58,57 +52,49 @@ module.exports = async (req, res) => {
           const recentReports = [];
           recentReportsSnapshot.forEach(doc => {
               const data = doc.data();
-              const report = {
-                  id: doc.id,
-                  ...data,
-                  createdAt: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : null
-              };
+              const report = { id: doc.id, ...data, createdAt: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : null };
               recentReports.push(report);
           });
           console.log(`[GET /api/v1/reports] Fetched ${recentReports.length} recent reports.`);
 
-          // ★★★ Calculate Monthly Summary (for current month) ★★★
+          // --- Calculate Monthly Summary ---
           console.log('[GET /api/v1/reports] Calculating monthly summary...');
-          const { startDate, endDate } = getMonthDateRangeUTC(); // Get UTC start/end of current month
+          const { startDate, endDate } = getMonthDateRangeUTC();
           const monthlyQuerySnapshot = await db.collection('reports')
                                           .where('createdAt', '>=', startDate)
-                                          .where('createdAt', '<', endDate) // '<' endDate で当月のみ
+                                          .where('createdAt', '<', endDate)
                                           .get();
-
-          let totalSales = 0;
-          let totalVisitors = 0;
-          let totalNewCustomers = 0;
-          let totalDyeCustomers = 0;
-          let monthlyTarget = null; // 当月の目標額を格納
-
+          let totalSales = 0, totalVisitors = 0, totalNewCustomers = 0, totalDyeCustomers = 0, monthlyTarget = null;
           monthlyQuerySnapshot.forEach(doc => {
               const data = doc.data();
               totalSales += data.sales_amount || 0;
               totalVisitors += data.visitor_count || 0;
               totalNewCustomers += data.new_customer_count || 0;
               totalDyeCustomers += data.dye_customer_count || 0;
-              // 月間目標額は、その月の最初のレポートから取得する（毎日のレポートに同じ値が入っている想定）
               if (monthlyTarget === null && data.monthly_target_amount !== undefined) {
                   monthlyTarget = data.monthly_target_amount;
               }
           });
+          // --- Get Target from Latest Report ---
+           let latestMonthlyTarget = 0;
+           const latestReportSnapshot = await db.collection('reports')
+                                             .where('createdAt', '>=', startDate)
+                                             .where('createdAt', '<', endDate)
+                                             .orderBy('createdAt', 'desc')
+                                             .limit(1)
+                                             .get();
+           if (!latestReportSnapshot.empty) {
+               latestMonthlyTarget = latestReportSnapshot.docs[0].data().monthly_target_amount || 0;
+           }
+           console.log(`[GET /api/v1/reports] Found latest monthly target for current month: ${latestMonthlyTarget}`);
 
-          const monthlySummary = {
-              totalSales,
-              totalVisitors,
-              totalNewCustomers,
-              totalDyeCustomers,
-              target: monthlyTarget ?? 0, // 見つからなければ0
-              reportCount: monthlyQuerySnapshot.size // 当月のレポート数
-          };
+          const monthlySummary = { totalSales, totalVisitors, totalNewCustomers, totalDyeCustomers, target: latestMonthlyTarget, reportCount: monthlyQuerySnapshot.size };
           console.log('[GET /api/v1/reports] Calculated monthly summary:', monthlySummary);
-          // ★★★ ここまで集計処理 ★★★
 
           // --- Return both recent reports and summary ---
-          // ★★★ 応答の形を変更 ★★★
           return res.status(200).json({
-              recentReports: recentReports, // 最近のレポートリスト
-              monthlySummary: monthlySummary // 月間の集計データ
+              recentReports: recentReports,
+              monthlySummary: monthlySummary
           });
 
       } catch (error) {
@@ -118,25 +104,22 @@ module.exports = async (req, res) => {
 
   } else if (req.method === 'POST') {
       // --- Handle POST Request (Submit Report & Send Push) ---
-      // ... (POST処理部分は変更なし) ...
       console.log('[POST /api/v1/reports] Received request');
-      // (Env Var Check logs...)
-      // (VAPID Config logic...)
-      // (Auth Check...)
+      // VAPID Config (inside handler)
+      let vapidKeysConfigured = false;
+      console.log('--- VAPID CONFIG START (inside handler) ---'); try { const vapidSubject = process.env.VAPID_SUBJECT; const vapidPublicKey = process.env.VAPID_PUBLIC_KEY; const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY; if (!vapidSubject || !vapidPublicKey || !vapidPrivateKey) { console.warn('[VAPID Config] VAPID env vars not fully set inside handler.'); } else { console.log('[VAPID Config] All VAPID env vars present inside handler. Configuring...'); try { webpush.setVapidDetails( vapidSubject, vapidPublicKey, vapidPrivateKey ); console.log('[VAPID Config] webpush.setVapidDetails called successfully inside handler.'); vapidKeysConfigured = true; console.log('[VAPID Config] vapidKeysConfigured flag set to true inside handler.'); } catch (setDetailsError) { console.error('[VAPID Config] Error DIRECTLY from setVapidDetails inside handler:', setDetailsError); } } } catch(e) { console.error("[VAPID Config] Outer catch error inside handler", e); } console.log(`[VAPID Config] Final check inside handler: vapidKeysConfigured = ${vapidKeysConfigured}`); console.log('--- VAPID CONFIG END (inside handler) ---');
+      // Auth Check
+      const providedApiKey = req.headers['x-api-key']; const expectedApiKey = process.env.EXPECTED_API_KEY; if (!providedApiKey || providedApiKey !== expectedApiKey) { return res.status(401).json({ error: '認証に失敗しました。APIキーが無効です。' }); }
       let savedReportId = null;
       try {
-          const reportData = req.body; /* ... */
-          if (!reportData || !reportData.report_date /* ... */) { return res.status(400).json({ error: '必須項目が不足しています。' }); }
-          const reportPayload = { /* ... */ };
-          const docRef = await db.collection('reports').add(reportPayload);
-          savedReportId = docRef.id;
-          console.log('Report document written with ID: ', savedReportId);
-          // (Push Notification Sending logic...)
+          const reportData = req.body; console.log('Received report data:', reportData); if (!reportData || !reportData.report_date /* ... */) { return res.status(400).json({ error: '必須項目が不足しています。' }); }
+          const reportPayload = { report_date: reportData.report_date, store_name: reportData.store_name, sales_amount: Number(reportData.sales_amount) || 0, daily_target_amount: Number(reportData.daily_target_amount) || 0, visitor_count: Number(reportData.visitor_count) || 0, new_customer_count: Number(reportData.new_customer_count) || 0, dye_customer_count: Number(reportData.dye_customer_count) || 0, comment: reportData.comment || null, monthly_target_amount: Number(reportData.monthly_target_amount) || 0, createdAt: admin.firestore.FieldValue.serverTimestamp() };
+          const docRef = await db.collection('reports').add(reportPayload); savedReportId = docRef.id; console.log('Report document written with ID: ', savedReportId);
+          // Push Notification Sending
+          console.log('Attempting to send push notifications...'); if (vapidKeysConfigured) { console.log('VAPID keys configured, proceeding...'); const subscriptionsSnapshot = await db.collection('pushSubscriptions').get(); if (subscriptionsSnapshot.empty) { console.log('No push subscriptions found.'); } else { console.log(`Found ${subscriptionsSnapshot.size} subscriptions...`); const notificationPayload = JSON.stringify({ title: `[${reportPayload.store_name}] 新しい日報`, body: `売上: ${reportPayload.sales_amount.toLocaleString()}円 (日次目標: ${reportPayload.daily_target_amount.toLocaleString()}円)` }); const sendPromises = []; subscriptionsSnapshot.forEach(doc => { const subRecord = doc.data(); if (subRecord.subscription && subRecord.subscription.endpoint) { console.log(`Sending to ${subRecord.subscription.endpoint.substring(0,40)}...`); sendPromises.push(webpush.sendNotification(subRecord.subscription, notificationPayload).catch(err => { console.error(`Failed push to ${subRecord.subscription.endpoint.substring(0,40)} Err: ${err.statusCode}`); if (err.statusCode === 404 || err.statusCode === 410) { console.log(`Deleting sub: ${doc.id}`); return doc.ref.delete(); }})); } else {console.warn(`Invalid sub doc ${doc.id}`);} }); const results = await Promise.allSettled(sendPromises); console.log('Push results:', results.map(r => r.status)); } } else { console.warn('VAPID keys NOT configured correctly, skipping.'); }
           return res.status(201).json({ message: '日報を受け付け、通知送信処理を試みました。', reportId: savedReportId });
       } catch (error) {
-           console.error('[POST /api/v1/reports] Error processing report request:', error);
-           /* ... specific error checks ... */
-           return res.status(500).json({ error: `サーバー内部でエラーが発生しました: ${error.message}` });
+          console.error('[POST /api/v1/reports] Error processing report request:', error); if (error instanceof TypeError && error.message.includes('toLocaleString')) { return res.status(500).json({ error: `サーバー内部でエラー (toLocaleString): ${error.message}` }); } if (error instanceof SyntaxError && error.message.includes('JSON')) { return res.status(400).json({ error: 'リクエストボディのJSON形式が不正です。' }); } return res.status(500).json({ error: `サーバー内部でエラーが発生しました: ${error.message}` });
       }
 
   } else {
