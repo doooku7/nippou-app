@@ -1,14 +1,15 @@
+// nippou-app/vercel.json (拡張子を .js に修正)
 {
-    "builds": [
-      {
-        "src": "api/**/*.cjs",
-        "use": "@vercel/node"
-      }
-    ],
-    "routes": [
-      {
-        "src": "/api/(.*)",
-        "dest": "/api/$1"
-      }
-    ]
-  }
+  "builds": [
+    {
+      "src": "api/**/*.js",  // ← ここを .cjs から .js に変更！
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/$1"
+    }
+  ]
+}
