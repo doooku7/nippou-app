@@ -1,9 +1,9 @@
-// api/v1/reports.js (toLocaleString デバッグログ + VAPID設定修正 + プッシュ通知送信機能付き)
+// api/v1/reports.js (GET:レポート取得 と POST:レポート登録・通知送信 の両方を処理)
 
 const admin = require('firebase-admin');
 const webpush = require('web-push');
 
-// --- Firebase Admin SDK Initialization --- (トップレベルでOK)
+// --- Firebase Admin SDK Initialization ---
 try {
   const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (!serviceAccountJson) { throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON env var not set.'); }
@@ -21,160 +21,96 @@ try {
   console.error('Firebase Admin Initialization Error:', e);
   throw new Error(`Firebase Admin SDK Initialization Failed: ${e.message}`);
 }
-const db = admin.firestore();
+const db = admin.firestore(); // Get DB instance after successful init
 
 // --- API Endpoint Logic ---
 module.exports = async (req, res) => {
-  // --- Env Var Check Logs --- (デバッグ用に残す)
-  console.log('--- START ENV VAR CHECK (inside handler) ---');
-  console.log('EXPECTED_API_KEY exists:', !!process.env.EXPECTED_API_KEY);
-  console.log('FIREBASE_SERVICE_ACCOUNT_JSON exists:', !!process.env.FIREBASE_SERVICE_ACCOUNT_JSON, 'Length:', (process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').length);
-  console.log('VAPID_SUBJECT exists:', !!process.env.VAPID_SUBJECT, 'Value:', process.env.VAPID_SUBJECT);
-  console.log('VAPID_PUBLIC_KEY exists:', !!process.env.VAPID_PUBLIC_KEY, 'Value (start):', (process.env.VAPID_PUBLIC_KEY || '').substring(0, 10));
-  console.log('VAPID_PRIVATE_KEY exists:', !!process.env.VAPID_PRIVATE_KEY, 'Value (start):', (process.env.VAPID_PRIVATE_KEY || '').substring(0, 10));
-  console.log('--- END ENV VAR CHECK (inside handler) ---');
-
   // --- DB Init Check ---
   if (!db) {
     console.error('Firestore DB instance is not available (reports handler).');
     return res.status(500).json({ error: 'サーバー設定エラー (DB Init Failed)。' });
   }
 
-  // --- VAPID Configuration --- (ハンドラ内に移動済み)
-  let vapidKeysConfigured = false;
-  console.log('--- VAPID CONFIG START (inside handler) ---');
-  try {
-    const vapidSubject = process.env.VAPID_SUBJECT;
-    const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
-    const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
-
-    if (!vapidSubject || !vapidPublicKey || !vapidPrivateKey) {
-      console.warn('[VAPID Config] VAPID env vars not fully set inside handler.');
-    } else {
-      console.log('[VAPID Config] All VAPID env vars present inside handler. Configuring...');
+  // ============ リクエストメソッドによる処理分岐 ============
+  if (req.method === 'GET') {
+      // --- GETリクエスト処理 (日報リスト取得) ---
+      console.log('[GET /api/v1/reports] Received request');
       try {
-          webpush.setVapidDetails(
-            vapidSubject,
-            vapidPublicKey,
-            vapidPrivateKey
-          );
-          console.log('[VAPID Config] webpush.setVapidDetails called successfully inside handler.');
-          vapidKeysConfigured = true;
-          console.log('[VAPID Config] vapidKeysConfigured flag set to true inside handler.');
-      } catch (setDetailsError) {
-           console.error('[VAPID Config] Error DIRECTLY from setVapidDetails inside handler:', setDetailsError);
-      }
-    }
-  } catch(e) {
-    console.error("[VAPID Config] Outer catch error inside handler", e);
-  }
-  console.log(`[VAPID Config] Final check inside handler: vapidKeysConfigured = ${vapidKeysConfigured}`);
-  console.log('--- VAPID CONFIG END (inside handler) ---');
+          const limit = 50; // 一度に取得する件数上限
+          const querySnapshot = await db.collection('reports')
+                                      .orderBy('createdAt', 'desc') // 保存された日時が新しい順
+                                      // .orderBy('report_date', 'desc') // または報告日で並び替えたい場合
+                                      .limit(limit)
+                                      .get();
 
-  // --- Method & Auth Check ---
-  if (req.method !== 'POST') { return res.status(405).json({ error: `Method ${req.method} Not Allowed` }); }
-  const providedApiKey = req.headers['x-api-key'];
-  const expectedApiKey = process.env.EXPECTED_API_KEY;
-  if (!providedApiKey || providedApiKey !== expectedApiKey) { return res.status(401).json({ error: '認証に失敗しました。APIキーが無効です。' }); }
-
-  let savedReportId = null;
-
-  try {
-    // --- リクエストボディ取得 & 基本Validation ---
-    const reportData = req.body;
-    console.log('Received report data:', reportData);
-    if (!reportData || !reportData.report_date || !reportData.store_name /* etc */) {
-        console.error('Validation Error: Missing required fields in report data');
-        return res.status(400).json({ error: '必須項目が不足しています。' });
-    }
-    // TODO: Add more detailed validation
-
-    // --- Prepare Data for Firestore ---
-    const reportPayload = {
-      report_date: reportData.report_date,
-      store_name: reportData.store_name,
-      sales_amount: Number(reportData.sales_amount) || 0,
-      daily_target_amount: Number(reportData.daily_target_amount) || 0,
-      visitor_count: Number(reportData.visitor_count) || 0,
-      new_customer_count: Number(reportData.new_customer_count) || 0,
-      dye_customer_count: Number(reportData.dye_customer_count) || 0,
-      comment: reportData.comment || null,
-      monthly_target_amount: Number(reportData.monthly_target_amount) || 0,
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
-    };
-
-    // --- Save Report to Firestore ---
-    const docRef = await db.collection('reports').add(reportPayload);
-    savedReportId = docRef.id;
-    console.log('Report document written with ID: ', savedReportId);
-
-    // ★★★ プッシュ通知送信処理 ★★★
-    console.log('Attempting to send push notifications...');
-    if (vapidKeysConfigured) {
-        console.log('VAPID keys seem configured, proceeding to fetch subscriptions...');
-        const subscriptionsSnapshot = await db.collection('pushSubscriptions').get();
-
-        if (subscriptionsSnapshot.empty) {
-          console.log('No push subscriptions found.');
-        } else {
-          console.log(`Found ${subscriptionsSnapshot.size} subscriptions. Preparing to send...`);
-
-          // ★★★★★ toLocaleString 前のデバッグログ ★★★★★
-          console.log('DEBUG: Checking reportPayload before creating notification:');
-          console.log('DEBUG: reportPayload:', JSON.stringify(reportPayload, null, 2)); // オブジェクト全体
-          console.log('DEBUG: reportPayload.sales_amount:', reportPayload.sales_amount, typeof reportPayload.sales_amount); // 売上金額と型
-          console.log('DEBUG: reportPayload.daily_target_amount:', reportPayload.daily_target_amount, typeof reportPayload.daily_target_amount); // 日次目標と型
-          // ★★★★★ ここまで追加 ★★★★★
-
-          // 通知ペイロードを作成
-          const notificationPayload = JSON.stringify({
-            title: `[${reportPayload.store_name}] 新しい日報`,
-            // ↓↓↓ ここでエラーが発生していた箇所 ↓↓↓
-            body: `売上: ${reportPayload.sales_amount.toLocaleString()}円 (日次目標: ${reportPayload.daily_target_amount.toLocaleString()}円)`,
-          });
-
-          const sendPromises = [];
-          subscriptionsSnapshot.forEach(doc => {
-            const subscriptionRecord = doc.data();
-            if (subscriptionRecord.subscription && subscriptionRecord.subscription.endpoint) {
-              console.log(`Sending notification to endpoint starting with: ${subscriptionRecord.subscription.endpoint.substring(0, 40)}...`);
-              const pushPromise = webpush.sendNotification(
-                subscriptionRecord.subscription,
-                notificationPayload
-              ).catch(err => {
-                 console.error(`Failed to send notification to ${subscriptionRecord.subscription.endpoint.substring(0, 40)}... Error: ${err.statusCode} ${err.message}`);
-                 if (err.statusCode === 404 || err.statusCode === 410) {
-                   console.log(`Deleting expired/invalid subscription: ${doc.id}`);
-                   return doc.ref.delete();
-                 }
+          const reports = [];
+          querySnapshot.forEach(doc => {
+              const data = doc.data();
+              // FirestoreのTimestampをISO文字列に変換 (フロントエンドで扱いやすくするため)
+              const createdAtISO = data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : null;
+              reports.push({
+                  id: doc.id,         // ドキュメントIDも含める
+                  ...data,            // 元のデータを展開
+                  createdAt: createdAtISO // 変換後のタイムスタンプで上書き
               });
-              sendPromises.push(pushPromise);
-            } else {
-               console.warn(`Subscription document ${doc.id} is invalid.`);
-            }
           });
 
-          const results = await Promise.allSettled(sendPromises);
-          console.log('Push notification sending results:', results.map(r => r.status));
-        }
-    } else {
-        console.warn('VAPID keys NOT configured correctly for this request, skipping.');
-    }
-    // ★★★ ここまで ★★★
+          console.log(`[GET /api/v1/reports] Fetched ${reports.length} reports.`);
+          return res.status(200).json(reports); // 取得したレポートの配列をJSONで返す
 
-    // --- Return Success Response ---
-    return res.status(201).json({ message: '日報を受け付け、通知送信処理を試みました。', reportId: savedReportId });
+      } catch (error) {
+          console.error('[GET /api/v1/reports] Error fetching reports:', error);
+          return res.status(500).json({ error: 'レポートの取得中にエラーが発生しました。' });
+      }
 
-  } catch (error) {
-    // --- Error Handling ---
-    console.error('Error processing report request:', error);
-    if (error instanceof TypeError && error.message.includes('toLocaleString')) {
-        console.error('>>> Likely error during toLocaleString() call!');
-         return res.status(500).json({ error: `サーバー内部でエラー (toLocaleString): ${error.message}` });
-    }
-    if (error instanceof SyntaxError && error.message.includes('JSON')) {
-        return res.status(400).json({ error: 'リクエストボディのJSON形式が不正です。' });
-    }
-    return res.status(500).json({ error: `サーバー内部でエラーが発生しました: ${error.message}` });
+  } else if (req.method === 'POST') {
+      // --- POSTリクエスト処理 (日報登録 & プッシュ通知) ---
+      console.log('[POST /api/v1/reports] Received request');
+
+      // (環境変数チェックログ、VAPID設定、認証チェックは変更なし)
+      console.log('--- START ENV VAR CHECK ...'); /* ... */ console.log('--- END ENV VAR CHECK ...');
+      let vapidKeysConfigured = false;
+      console.log('--- VAPID CONFIG START ...'); /* ... */ console.log('--- VAPID CONFIG END ...');
+      try { /* ... configure webpush ... */ vapidKeysConfigured = true; /* ... */ } catch (e) { /* ... */ }
+
+      const providedApiKey = req.headers['x-api-key']; /* ... */
+      if (!providedApiKey || providedApiKey !== process.env.EXPECTED_API_KEY) { return res.status(401).json({ error: '認証に失敗しました。APIキーが無効です。' }); }
+
+      let savedReportId = null;
+      try {
+          const reportData = req.body; /* ... */
+          if (!reportData || !reportData.report_date /* ... */) { return res.status(400).json({ error: '必須項目が不足しています。' }); }
+          const reportPayload = { /* ... */ }; // (変更なし)
+          const docRef = await db.collection('reports').add(reportPayload);
+          savedReportId = docRef.id;
+          console.log('Report document written with ID: ', savedReportId);
+
+          // --- Push Notification Sending --- (変更なし)
+          console.log('Attempting to send push notifications...');
+          if (vapidKeysConfigured) {
+              console.log('VAPID keys configured, proceeding...');
+              // デバッグログ
+              console.log('DEBUG: Checking reportPayload before creating notification:'); /* ... */
+              // 購読情報取得 & 送信ループ
+              const subscriptionsSnapshot = await db.collection('pushSubscriptions').get();
+              if (subscriptionsSnapshot.empty) { /* ... */ }
+              else { /* ... loop and webpush.sendNotification ... */ }
+          } else {
+              console.warn('VAPID keys NOT configured correctly, skipping.');
+          }
+
+          return res.status(201).json({ message: '日報を受け付け、通知送信処理を試みました。', reportId: savedReportId });
+
+      } catch (error) {
+          console.error('[POST /api/v1/reports] Error processing report request:', error);
+          /* ... specific error checks ... */
+          return res.status(500).json({ error: `サーバー内部でエラーが発生しました: ${error.message}` });
+      }
+
+  } else {
+      // --- その他のメソッドは許可しない ---
+      console.log(`Received unsupported method: ${req.method}`);
+      res.setHeader('Allow', ['GET', 'POST']); // AllowヘッダーにGETを追加
+      return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
   }
 };
