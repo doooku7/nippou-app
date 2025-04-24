@@ -1,6 +1,6 @@
 {
-  "name": "日報アプリ",
-  "short_name": "日報App",
+  "name": "カルソル日報",
+  "short_name": "カルソル日報",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
