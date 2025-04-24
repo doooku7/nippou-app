@@ -4,7 +4,7 @@ import { getAuth } from "firebase/auth";   // Firebase Auth モジュールを�
 
 // ★★★ 下の firebaseConfig の中身全体を、Firebase コンソールからコピーしたものに置き換える ★★★
 const firebaseConfig = {
-    apiKey: "AIzaSyBugPWPVjfKt4CrgVT4RVEcrlvc-THUt3E",
+    apiKey: "AIzaSyAjkR1IPkS7tZVA0f0eosg25yyU8c93X8A",
     authDomain: "nippou-app-001.firebaseapp.com",
     projectId: "nippou-app-001",
     storageBucket: "nippou-app-001.firebasestorage.app",
