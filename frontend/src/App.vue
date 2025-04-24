@@ -207,9 +207,9 @@ onMounted(() => {
 
     <!-- ↓↓↓ 元々のコンテンツはここに入れる ↓↓↓ -->
     <div>
-      <h1>日報アプリ - 通知設定</h1>
-      <p>日報が届いたときにプッシュ通知を受け取るには、以下のボタンを押して通知を許可してください。</p>
-      <button @click="subscribeToNotifications">通知を購読する</button> <!-- TODO: Add v-if="!isSubscribed" later -->
+      <h1>カルソル日報</h1>
+      <p>日報が届いたときにプッシュ通知を受け取るには、以下のボタンを押して、その後出てくる通知設定で許可を選択してください。</p>
+      <button @click="subscribeToNotifications">日報をプッシュ通知する</button> <!-- TODO: Add v-if="!isSubscribed" later -->
       <p v-if="subscriptionStatus">{{ subscriptionStatus }}</p>
     </div>
 
