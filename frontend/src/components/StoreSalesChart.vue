@@ -43,8 +43,8 @@ const processedChartData = computed(() => {
     datasets: [
       {
         label: '店舗別 売上 (円)', // 凡例のラベル
-        backgroundColor: '#41B883', // 棒グラフの色
-        borderColor: '#2a8a5e', // 枠線の色 (任意)
+        backgroundColor: '#27222', // 棒グラフの色
+        borderColor: '#ba5618', // 枠線の色 (任意)
         borderWidth: 1,         // 枠線の太さ (任意)
         data: dataPoints      // Y軸の値 (売上)
       }

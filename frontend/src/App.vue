@@ -6,24 +6,37 @@ import StoreSalesChart from './components/StoreSalesChart.vue'; // パスを確�
 // --- Notification Subscription Logic (変更なし) ---
 const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
 const subscriptionStatus = ref('');
+// isSubscribed の ref と checkSubscriptionStatus 関数は、もし以前の実装がなければ、
+// ここのコメントアウトを解除して有効化してください。（ボタン非表示機能）
+// const isSubscribed = ref(false);
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - base64String.length % 4) % 4); const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/'); const rawData = window.atob(base64); const outputArray = new Uint8Array(rawData.length); for (let i = 0; i < rawData.length; ++i) { outputArray[i] = rawData.charCodeAt(i); } return outputArray;
 }
+/*
+async function checkSubscriptionStatus() {
+  if ('serviceWorker' in navigator && 'PushManager' in window) {
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      isSubscribed.value = !!subscription;
+      console.log('Initial subscription state:', isSubscribed.value);
+    } catch (e) { console.error('Error checking subscription status:', e); }
+  }
+}
+*/
 async function subscribeToNotifications() {
-  subscriptionStatus.value = '処理中...'; if (!('serviceWorker' in navigator) || !('PushManager' in window)) { subscriptionStatus.value = 'エラー: プッシュ通知はこのブラウザではサポートされていません。'; console.error('Push messaging is not supported'); return; } try { console.log('Registering service worker...'); const registration = await navigator.serviceWorker.register('/sw.js'); console.log('Service Worker registered:', registration); await navigator.serviceWorker.ready; console.log('Service Worker ready.'); console.log('Requesting notification permission...'); const permission = await Notification.requestPermission(); if (permission !== 'granted') { subscriptionStatus.value = '通知の許可が得られませんでした。'; console.error('Permission not granted for Notification'); return; } console.log('Notification permission granted.'); console.log('Subscribing to push manager...'); if (!vapidPublicKey) { subscriptionStatus.value = 'エラー: VAPID公開鍵が設定されていません(env)。'; console.error('VAPID public key is not defined. Check VITE_VAPID_PUBLIC_KEY env var.'); return; } console.log('VAPID Public Key from env for subscribe:', vapidPublicKey); let subscription; try { const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey); console.log('Converted applicationServerKey (first 5 bytes):', applicationServerKey ? applicationServerKey.slice(0, 5) : 'null or undefined'); subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: applicationServerKey }); console.log('User is subscribed:', subscription); } catch (subscribeError) { console.error('Error during pushManager.subscribe:', subscribeError); subscriptionStatus.value = `購読中にエラーが発生しました: ${subscribeError.message}`; return; } console.log('Sending subscription to server...'); const response = await fetch('/api/v1/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json', }, body: JSON.stringify({ subscription: subscription }), }); if (!response.ok) { const errorData = await response.json(); throw new Error(`サーバーエラー: ${response.status} ${response.statusText} - ${errorData.error || '不明なエラー'}`); } const result = await response.json(); console.log('Server response:', result); subscriptionStatus.value = `購読に成功しました！ (${result.message})`; } catch (error) { if (!subscriptionStatus.value.includes('購読中にエラー')) { subscriptionStatus.value = `エラーが発生しました: ${error.message}`; } console.error('Error during subscription process:', error); }
+  subscriptionStatus.value = '処理中...'; if (!('serviceWorker' in navigator) || !('PushManager' in window)) { subscriptionStatus.value = 'エラー: プッシュ通知はこのブラウザではサポートされていません。'; console.error('Push messaging is not supported'); return; } try { console.log('Registering service worker...'); const registration = await navigator.serviceWorker.register('/sw.js'); console.log('Service Worker registered:', registration); await navigator.serviceWorker.ready; console.log('Service Worker ready.'); console.log('Requesting notification permission...'); const permission = await Notification.requestPermission(); if (permission !== 'granted') { subscriptionStatus.value = '通知の許可が得られませんでした。'; console.error('Permission not granted for Notification'); return; } console.log('Notification permission granted.'); console.log('Subscribing to push manager...'); if (!vapidPublicKey) { subscriptionStatus.value = 'エラー: VAPID公開鍵が設定されていません(env)。'; console.error('VAPID public key is not defined. Check VITE_VAPID_PUBLIC_KEY env var.'); return; } console.log('VAPID Public Key from env for subscribe:', vapidPublicKey); let subscription; try { const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey); console.log('Converted applicationServerKey (first 5 bytes):', applicationServerKey ? applicationServerKey.slice(0, 5) : 'null or undefined'); subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: applicationServerKey }); console.log('User is subscribed:', subscription); } catch (subscribeError) { console.error('Error during pushManager.subscribe:', subscribeError); subscriptionStatus.value = `購読中にエラーが発生しました: ${subscribeError.message}`; return; } console.log('Sending subscription to server...'); const response = await fetch('/api/v1/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json', }, body: JSON.stringify({ subscription: subscription }), }); if (!response.ok) { const errorData = await response.json(); throw new Error(`サーバーエラー: ${response.status} ${response.statusText} - ${errorData.error || '不明なエラー'}`); } const result = await response.json(); console.log('Server response:', result); subscriptionStatus.value = `購読に成功しました！ (${result.message})`; /* isSubscribed.value = true; */ } catch (error) { if (!subscriptionStatus.value.includes('購読中にエラー')) { subscriptionStatus.value = `エラーが発生しました: ${error.message}`; } console.error('Error during subscription process:', error); }
 }
 // --- End Notification Subscription Logic ---
 
 // --- Report Display Logic ---
-const reports = ref([]); // 元のレポートリスト
+const reports = ref([]);
 const storesSummaryData = ref({});
 const overallTargetData = ref(0);
 const summaryLastUpdatedData = ref(null);
 const isLoading = ref(true);
 const fetchError = ref(null);
-
-// ★★★ フィルター用に追加 ★★★
-const selectedStore = ref(null); // 選択中の店舗名を保持 (nullなら全表示)
+const selectedStore = ref(null); // フィルター用
 
 // 日付フォーマット関数 (変更なし)
 function formatDateTime(isoString) {
@@ -38,7 +51,7 @@ async function fetchApiData() {
   storesSummaryData.value = {};
   overallTargetData.value = 0;
   summaryLastUpdatedData.value = null;
-  selectedStore.value = null; // ★ データ再取得時はフィルターも解除する
+  selectedStore.value = null; // Reset filter on fetch
 
   console.log('Fetching reports and summaries from /api/v1/reports...');
   try {
@@ -92,25 +105,21 @@ const sortedReports = computed(() => {
   });
 });
 
-// ★★★ フィルター用関数を追加 ★★★
+// フィルター用関数 (変更なし)
 function filterByStore(storeName) {
   if (selectedStore.value === storeName) {
-    // すでに選択されているカードを再度クリックしたらフィルター解除
     selectedStore.value = null;
   } else {
-    // 新しい店舗名でフィルターを設定
     selectedStore.value = storeName;
   }
-  console.log("Filtering by store:", selectedStore.value); // 動作確認用ログ
+  console.log("Filtering by store:", selectedStore.value);
 }
 
-// ★★★ フィルターされたレポートリスト用 computed を追加 ★★★
+// フィルターされたレポートリスト用 computed (変更なし)
 const filteredAndSortedReports = computed(() => {
-  // selectedStore.value が null または空文字なら、フィルターせずにソート済みの全件を返す
   if (!selectedStore.value) {
     return sortedReports.value;
   }
-  // selectedStore.value と同じ store_name を持つレポートだけを抽出
   return sortedReports.value.filter(report => report.store_name === selectedStore.value);
 });
 
@@ -118,6 +127,7 @@ const filteredAndSortedReports = computed(() => {
 // マウント時にデータを取得 (変更なし)
 onMounted(() => {
   fetchApiData();
+  // checkSubscriptionStatus(); // ★ もし購読状態チェックを有効にするならコメント解除
 });
 // --- End Report Display Logic ---
 </script>
@@ -126,13 +136,15 @@ onMounted(() => {
   <div>
     <h1>日報アプリ - 通知設定</h1>
     <p>日報が届いたときにプッシュ通知を受け取るには、以下のボタンを押して通知を許可してください。</p>
-    <button @click="subscribeToNotifications">通知を購読する</button>
-    <p v-if="subscriptionStatus">{{ subscriptionStatus }}</p>
+    <button @click="subscribeToNotifications">通知を購読する</button> <p v-if="subscriptionStatus">{{ subscriptionStatus }}</p>
   </div>
 
   <hr>
   <div>
     <h2>月次集計 (店舗別)</h2>
+    <button @click="fetchApiData" :disabled="isLoading">
+      {{ isLoading ? '読み込み中...' : '最新情報に更新' }}
+    </button>
     <div v-if="isLoading">集計データを読み込み中...</div>
     <div v-else-if="fetchError" style="color: red;">集計データの読み込みエラー: {{ fetchError }}</div>
     <div v-else-if="Object.keys(storesSummaryData).length > 0">
@@ -146,15 +158,16 @@ onMounted(() => {
              class="store-summary-card"
              @click="filterByStore(storeName)"
              style="cursor: pointer;"
-             :class="{ 'selected-card': selectedStore === storeName }"> <h3>{{ storeName }}</h3>
+             :class="{ 'selected-card': selectedStore === storeName }">
+          <h3>{{ storeName }}</h3>
           <p><strong>売上:</strong> {{ summary.sales_amount?.toLocaleString() ?? 'N/A' }} 円</p>
-           <p>
-              <strong>売上差額<small>(対 日次目標計)</small>:</strong>
-              <span v-if="typeof summary.sales_amount === 'number' && typeof summary.daily_target_amount === 'number'">
-                {{ (summary.sales_amount - summary.daily_target_amount).toLocaleString() }} 円
-              </span>
-              <span v-else>計算不可</span>
-            </p>
+          <p>
+            <strong>売上差額<small>(対 日次目標計)</small>:</strong>
+            <span v-if="typeof summary.sales_amount === 'number' && typeof summary.daily_target_amount === 'number'">
+              {{ (summary.sales_amount - summary.daily_target_amount).toLocaleString() }} 円
+            </span>
+            <span v-else>計算不可</span>
+          </p>
           <p><strong>客数:</strong> {{ summary.visitor_count ?? 'N/A' }} 人 (新規: {{ summary.new_customer_count ?? 'N/A' }}, 染め: {{ summary.dye_customer_count ?? 'N/A' }})</p>
           <p><strong>値引計:</strong> {{ summary.discount_amount?.toLocaleString() ?? 'N/A' }} 円</p>
           <p><strong>月間目標:</strong> {{ summary.monthly_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
@@ -179,10 +192,7 @@ onMounted(() => {
          ({{ selectedStore }} のフィルター解除)
       </button>
     </h2>
-    <button @click="fetchApiData" :disabled="isLoading">
-      {{ isLoading ? '読み込み中...' : '最新情報に更新' }}
-    </button>
-     <div v-if="isLoading && reports.length === 0">レポートリストを読み込んでいます...</div>
+    <div v-if="isLoading && reports.length === 0">レポートリストを読み込んでいます...</div>
 
     <div v-else-if="filteredAndSortedReports.length > 0" class="report-list-cards">
       <div v-for="report in filteredAndSortedReports" :key="report.id" class="report-card">
@@ -195,12 +205,11 @@ onMounted(() => {
          <small class="report-meta">登録日時: {{ formatDateTime(report.createdAt) }} (ID: {{ report.id }})</small>
       </div>
     </div>
- 
     <p v-else-if="!isLoading && !fetchError">
-      <span v-if="selectedStore" style="font-weight: bold;">{{ selectedStore }} の</span> 表示できる最近の日報データがありません。 </p>
- 
-
-  </div>
+      <span v-if="selectedStore" style="font-weight: bold;">{{ selectedStore }} の</span>
+      表示できる最近の日報データがありません。
+    </p>
+    </div>
 </template>
 
 <style scoped>
@@ -218,9 +227,9 @@ onMounted(() => {
     padding: 12px 16px;
     background-color: #f9f9f9;
     box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-    transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out; /* スムーズな変化 */
+    transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
   }
-   /* ★★★ 選択中カードのスタイル (任意) ★★★ */
+  /* 選択中カードのスタイル (任意) */
   .store-summary-card.selected-card {
       border-color: #41B883; /* Vue Green */
       box-shadow: 0 3px 8px rgba(65, 184, 131, 0.5);
