@@ -40,53 +40,79 @@ function formatDateTime(isoString) {
 
 // API呼び出し関数
 async function fetchApiData() {
-  // isLoading.value = true; // isLoadingは認証チェックで管理
-  fetchError.value = null;
-  reports.value = [];
-  storesSummaryData.value = {};
-  overallTargetData.value = 0;
-  summaryLastUpdatedData.value = null;
-  selectedStore.value = null;
+  // isLoading.value = true; // ローディングは onAuthStateChanged で管理
+  fetchError.value = null; // エラーリセット
+  // データリセットも onAuthStateChanged で行うのでここでは不要かも
+  // reports.value = [];
+  // storesSummaryData.value = {};
+  // overallTargetData.value = 0;
+  // summaryLastUpdatedData.value = null;
+  // selectedStore.value = null;
 
   console.log('Fetching reports and summaries from /api/v1/reports...');
-  try {
-    // ★★★ API 保護が実装されたら ID トークンをヘッダーで送る必要がある ★★★
-    // const idToken = await currentUser.value?.getIdToken();
-    // const headers = idToken ? { 'Authorization': `Bearer ${idToken}` } : {};
-    // const response = await fetch('/api/v1/reports', { headers });
 
-    // ★ 現時点では API 保護は未実装なので、そのまま fetch ★
-    const response = await fetch('/api/v1/reports');
+  try {
+    // ★★★ ↓↓↓ ここから追加・変更 ↓↓↓ ★★★
+    if (!currentUser.value) {
+      // この関数はログイン後に呼ばれるはずだが、念のためチェック
+      throw new Error('ユーザーがログインしていません。');
+    }
+
+    console.log("Getting ID token for API request...");
+    // 現在のユーザーからIDトークンを取得 (これは非同期処理！)
+    const idToken = await currentUser.value.getIdToken();
+
+    // fetch リクエストに Authorization ヘッダーを追加するための headers オブジェクトを作成
+    const headers = {
+      'Authorization': `Bearer ${idToken}`
+    };
+    console.log("Fetching API with Authorization header...");
+
+    // fetch 呼び出しに headers オプションを追加して実行
+    const response = await fetch('/api/v1/reports', { headers: headers });
+    // ★★★ ↑↑↑ ここまで追加・変更 ↑↑↑ ★★★
 
     if (!response.ok) {
-      // ★ API が 401/403 を返すようになったらここでハンドルできる ★
+      // APIからのエラーメッセージを取得・表示するように改善
+      let errorMsg = `HTTP error! status: ${response.status}`;
+      try {
+         // エラー応答がJSON形式の場合、メッセージを取得試行
+         const errorData = await response.json();
+         errorMsg = errorData.error || errorMsg;
+      } catch(e) { /* JSON parse error */ }
+      // 401/403エラーの場合は再ログインを促すメッセージを追加しても良い
       if (response.status === 401 || response.status === 403) {
-        throw new Error('アクセス権がありません。再度ログインしてください。');
+          errorMsg = `アクセス権エラー: ${errorMsg} 再ログインが必要な場合があります。`;
+          // handleLogout(); // 強制的にログアウトさせることも可能
       }
-      throw new Error(`HTTP error! status: ${response.status} ${response.statusText}`);
+      throw new Error(errorMsg);
     }
     const data = await response.json();
 
+    // ref へのデータ代入部分は変更なし
     if (data) {
-        reports.value = data.recentReports || [];
-        storesSummaryData.value = data.storesSummary || {};
-        overallTargetData.value = data.overallTarget || 0;
-        summaryLastUpdatedData.value = data.summaryLastUpdated || null;
-        console.log('Fetched reports:', reports.value.length);
-        console.log('Fetched stores summary:', storesSummaryData.value);
+      reports.value = data.recentReports || [];
+      storesSummaryData.value = data.storesSummary || {};
+      overallTargetData.value = data.overallTarget || 0;
+      summaryLastUpdatedData.value = data.summaryLastUpdated || null;
+      console.log('Fetched reports:', reports.value.length);
+      console.log('Fetched stores summary:', storesSummaryData.value);
     } else {
-        console.error('API response data is missing or invalid:', data);
-        throw new Error('API応答の形式が不正です。');
+      console.error('API response data is missing or invalid:', data);
+      throw new Error('API応答の形式が不正です。');
     }
+
   } catch (error) {
     console.error('Error fetching data:', error);
+    // fetchError ref にエラーメッセージを設定してテンプレートで表示
     fetchError.value = `データ取得に失敗: ${error.message}`;
+    // エラー発生時はデータをクリア
     reports.value = [];
     storesSummaryData.value = {};
     overallTargetData.value = 0;
     summaryLastUpdatedData.value = null;
   } finally {
-    // isLoading.value = false; // isLoadingは認証チェックで管理
+    // isLoading.value = false; // ローディング解除は onAuthStateChanged で行う
   }
 }
 
