@@ -23,21 +23,19 @@ try {
 }
 const db = admin.firestore(); // Get DB instance after successful init
 
-// Helper function to get month start/end in UTC (月間目標取得にまだ必要)
-function getMonthDateRangeUTC(now = new Date()) {
-    const year = now.getUTCFullYear();
-    const month = now.getUTCMonth(); // 0-11
-    const startDate = new Date(Date.UTC(year, month, 1, 0, 0, 0, 0));
-    const endDate = new Date(Date.UTC(year, month + 1, 1, 0, 0, 0, 0));
-    // console.log(`[Date Range Helper] Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`);
+// ★ Helper function to get month start/end in UTC for a specific year/month ★
+function getMonthDateRangeUTC(year, month) { // 引数で年月を受け取る
+    // month is 1-based (1 for Jan, 12 for Dec)
+    const startDate = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0)); // month-1 for 0-based index
+    const endDate = new Date(Date.UTC(year, month, 1, 0, 0, 0, 0)); // Next month's 1st day
+    // console.log(`[Date Range Helper] For ${year}-${month}: Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`);
     return { startDate, endDate };
 }
 
-// Helper function to create a consistent Document ID
+// Helper function to create a consistent Document ID (変更なし)
 function createReportId(reportDateStr, storeName) {
   let formattedDate = 'INVALID_DATE';
   try {
-    //<y_bin_46>/MM/DD または<y_bin_46>-MM-DD を解析し、YYYY-MM-DD 形式に統一
     const match = reportDateStr.match(/^(\d{4})\D(\d{2})\D(\d{2})/);
     if (match) {
       formattedDate = `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
@@ -46,7 +44,7 @@ function createReportId(reportDateStr, storeName) {
   const sanitizedStoreName = storeName ? String(storeName).replace(/\//g, '_').trim() : '';
   if (!sanitizedStoreName) { throw new Error('Store name is empty or invalid for ID'); }
   const generatedId = `${formattedDate}_${sanitizedStoreName}`;
-  return generatedId.substring(0, 500); // 念のため長さを制限
+  return generatedId.substring(0, 500);
 }
 
 
@@ -59,33 +57,21 @@ module.exports = async (req, res) => {
 
   // ============ REQUEST METHOD ROUTING ============
   if (req.method === 'GET') {
-      // ★★★ GET Handler (Reads storesSummary - Includes API Protection) ★★★
+      // ★★★ GET Handler (Handles Month Selection & API Protection) ★★★
       console.log('[GET /api/v1/reports] Received request');
       try { // Start of main try block for GET
-          // ★★★ START: API Protection Logic ★★★
+
+          // ★★★ START: API Protection Logic (変更なし) ★★★
           console.log('[Auth Check] Verifying user token...');
           const authorizationHeader = req.headers.authorization || '';
-          if (!authorizationHeader.startsWith('Bearer ')) {
-              console.error('[Auth Check] No Bearer token provided.');
-              return res.status(401).json({ error: '認証トークンが必要です。ログインしてください。' });
-          }
+          if (!authorizationHeader.startsWith('Bearer ')) { return res.status(401).json({ error: '認証トークンが必要です。ログインしてください。' }); }
           const idToken = authorizationHeader.split('Bearer ')[1];
-          if (!idToken) {
-              console.error('[Auth Check] Bearer token is empty.');
-              return res.status(401).json({ error: '認証トークンが無効です。' });
-          }
-          let decodedToken;
-          let userRecord;
+          if (!idToken) { return res.status(401).json({ error: '認証トークンが無効です。' }); }
           try {
-              decodedToken = await admin.auth().verifyIdToken(idToken);
-              const uid = decodedToken.uid;
-              console.log('[Auth Check] Token verified. UID:', uid);
-              userRecord = await admin.auth().getUser(uid);
-              if (userRecord.disabled) {
-                  console.error(`[Auth Check] User ${uid} is disabled.`);
-                  return res.status(403).json({ error: 'このアカウントは無効化されています。アクセス権がありません。' });
-              }
-              console.log(`[Auth Check] User ${uid} (${userRecord.email}) is valid and enabled. Proceeding...`);
+              const decodedToken = await admin.auth().verifyIdToken(idToken);
+              const userRecord = await admin.auth().getUser(decodedToken.uid);
+              if (userRecord.disabled) { return res.status(403).json({ error: 'このアカウントは無効化されています。アクセス権がありません。' }); }
+              console.log(`[Auth Check] User ${decodedToken.uid} (${userRecord.email}) is valid and enabled. Proceeding...`);
           } catch (error) {
               console.error('[Auth Check] Token verification or user check failed:', error);
               if (error.code === 'auth/id-token-expired') { return res.status(401).json({ error: '認証トークンの有効期限が切れています。再ログインしてください。' }); }
@@ -94,11 +80,38 @@ module.exports = async (req, res) => {
           }
           // ★★★ END: API Protection Logic ★★★
 
+
           // --- If authenticated and authorized, proceed to fetch data ---
-          console.log('[Data Fetch] Starting data retrieval for authorized user.');
-          // Fetch Recent Reports (Sorted by report_date asc)
+          console.log('[Data Fetch] Starting data retrieval...');
+
+          // ★★★ START: Determine Target Year/Month from Query Params ★★★
+          const now = new Date();
+          let targetYear = now.getUTCFullYear(); // Default to current year
+          let targetMonth = now.getUTCMonth() + 1; // Default to current month (1-based)
+
+          // Check for query parameters ?year=YYYY&month=M
+          const requestedYear = parseInt(req.query.year, 10);
+          const requestedMonth = parseInt(req.query.month, 10);
+
+          if (!isNaN(requestedYear) && requestedYear > 2000 && requestedYear < 2100) {
+              targetYear = requestedYear;
+          }
+          if (!isNaN(requestedMonth) && requestedMonth >= 1 && requestedMonth <= 12) {
+              targetMonth = requestedMonth;
+          }
+
+          const yearMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}`; // Format YYYY-MM
+          console.log(`[Data Fetch] Target month for summary & target: ${yearMonth}`);
+          // ★★★ END: Determine Target Year/Month ★★★
+
+
+          // --- Fetch Recent Reports (Keep fetching absolute latest 50 for now) ---
           const limit = 50;
-          const recentReportsSnapshot = await db.collection('reports').orderBy('report_date', 'asc').limit(limit).get();
+          // ★ report_date の降順（新しい順）に戻す ★
+          const recentReportsSnapshot = await db.collection('reports')
+                                              .orderBy('report_date', 'desc')
+                                              .limit(limit)
+                                              .get();
           const recentReports = [];
           recentReportsSnapshot.forEach(doc => {
               const data = doc.data();
@@ -107,34 +120,59 @@ module.exports = async (req, res) => {
               recentReports.push(report);
           });
           console.log(`[Data Fetch] Fetched ${recentReports.length} recent reports.`);
-          // Fetch Pre-calculated Per-Store Monthly Summary
-          console.log('[Data Fetch] Fetching pre-calculated per-store monthly summary...');
+
+          // --- Fetch Pre-calculated Per-Store Monthly Summary for the target month ---
+          console.log(`[Data Fetch] Fetching pre-calculated summary for ${yearMonth}...`);
           let storesSummary = {};
           let summaryLastUpdated = null;
-          let yearMonth = "";
+
           try {
-            const now = new Date();
-            const year = now.getUTCFullYear();
-            const month = (now.getUTCMonth() + 1).toString().padStart(2, '0');
-            yearMonth = `${year}-${month}`;
+            // ★ Use the determined yearMonth ★
             const summaryDocRef = db.collection("monthlySummaries").doc(yearMonth);
             const summarySnapshot = await summaryDocRef.get();
+
             if (summarySnapshot.exists) {
                 const summaryData = summarySnapshot.data();
                 storesSummary = summaryData.stores || {};
                 summaryLastUpdated = summaryData.lastUpdated?.toDate ? summaryData.lastUpdated.toDate().toISOString() : null;
+                console.log(`[Data Fetch] Found summary document for ${yearMonth}.`);
+            } else {
+                console.log(`[Data Fetch] No summary document found for ${yearMonth}.`);
             }
-          } catch (summaryFetchError) { console.error(`[Data Fetch] Error fetching monthly summary for ${yearMonth}:`, summaryFetchError); }
-          // Get Overall Target from Latest Report
-          let latestMonthlyTarget = 0;
-          const { startDate, endDate } = getMonthDateRangeUTC(new Date());
+          } catch (summaryFetchError) {
+              console.error(`[Data Fetch] Error fetching monthly summary for ${yearMonth}:`, summaryFetchError);
+          }
+
+          // --- Get Overall Target for the target month --- ★ MODIFIED ★
+          let targetMonthTarget = 0;
+          // ★ Use targetYear and targetMonth to get the date range ★
+          const { startDate: targetStartDate, endDate: targetEndDate } = getMonthDateRangeUTC(targetYear, targetMonth);
           try {
-              const latestReportSnapshot = await db.collection('reports').where('createdAt', '>=', startDate).where('createdAt', '<', endDate).orderBy('createdAt', 'desc').limit(1).get();
-              if (!latestReportSnapshot.empty) { latestMonthlyTarget = latestReportSnapshot.docs[0].data().monthly_target_amount || 0; }
-          } catch (targetFetchError) { console.error('[Data Fetch] Error fetching latest monthly target:', targetFetchError); }
-          console.log('[Data Fetch] Prepared per-store summary and target.');
+              const latestReportSnapshot = await db.collection('reports')
+                                                // ★ Query within the target month ★
+                                                .where('createdAt', '>=', targetStartDate)
+                                                .where('createdAt', '<', targetEndDate)
+                                                .orderBy('createdAt', 'desc')
+                                                .limit(1)
+                                                .get();
+              if (!latestReportSnapshot.empty) {
+                  targetMonthTarget = latestReportSnapshot.docs[0].data().monthly_target_amount || 0;
+              }
+              console.log(`[Data Fetch] Fetched monthly target for ${yearMonth}: ${targetMonthTarget}`);
+          } catch (targetFetchError) {
+              console.error(`[Data Fetch] Error fetching monthly target for ${yearMonth}:`, targetFetchError);
+          }
+
+          console.log('[Data Fetch] Prepared data for response.');
+
           // Return data for authorized user
-          return res.status(200).json({ recentReports: recentReports, storesSummary: storesSummary, overallTarget: latestMonthlyTarget, summaryLastUpdated: summaryLastUpdated });
+          return res.status(200).json({
+              recentReports: recentReports,        // Absolute latest reports
+              storesSummary: storesSummary,        // Summary for the target month
+              overallTarget: targetMonthTarget,    // Target for the target month
+              summaryLastUpdated: summaryLastUpdated // Timestamp for the target month's summary
+          });
+
       } catch (error) { // Catch for the main data fetching logic
           console.error('[GET /api/v1/reports] Error during data fetching:', error);
           return res.status(500).json({ error: 'データの取得中にサーバーエラーが発生しました。' });
@@ -142,136 +180,33 @@ module.exports = async (req, res) => {
       // --- End of GET Handler ---
 
   } else if (req.method === 'POST') {
-      // ★★★ Handle POST Request (Ensure VAPID setup is correct) ★★★
+      // ★★★ POST Handler (Handles Duplicates - No changes needed from previous version) ★★★
       console.log('[POST /api/v1/reports] Received request');
-
-      // ★★★ START: VAPID Key Setup Logic (Ensure this block is present and correct) ★★★
       let vapidKeysConfigured = false;
-      try {
-          const vapidSubject = process.env.VAPID_SUBJECT;
-          const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
-          const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
-          console.log('[VAPID Check] Subject:', vapidSubject ? 'Found' : 'MISSING');
-          console.log('[VAPID Check] Public Key:', vapidPublicKey ? 'Found' : 'MISSING');
-          console.log('[VAPID Check] Private Key:', vapidPrivateKey ? 'Found' : 'MISSING');
-
-          if (!vapidSubject || !vapidPublicKey || !vapidPrivateKey) {
-              console.warn('[VAPID Config] One or more VAPID environment variables are missing.');
-          } else {
-              console.log('[VAPID Config] All VAPID environment variables seem present. Configuring web-push...');
-              try {
-                  webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
-                  console.log('[VAPID Config] webpush.setVapidDetails called successfully.');
-                  vapidKeysConfigured = true; // Set to true ONLY if setVapidDetails succeeds
-              } catch (setDetailsError) {
-                  console.error('[VAPID Config] Error calling webpush.setVapidDetails:', setDetailsError);
-                  // Do not set vapidKeysConfigured to true if this fails
-              }
-          }
-      } catch (e) {
-          // Catch potential errors during environment variable access/parsing (less likely here)
-          console.error("[VAPID Config] Error accessing VAPID environment variables:", e);
-      }
-      console.log(`[VAPID Config] Final check: vapidKeysConfigured = ${vapidKeysConfigured}`);
-      // ★★★ END: VAPID Key Setup Logic ★★★
-
-      // Auth Check (API Key - Keep existing)
+      try { /* VAPID Setup */ const vSub=process.env.VAPID_SUBJECT,vPub=process.env.VAPID_PUBLIC_KEY,vPri=process.env.VAPID_PRIVATE_KEY; if(vSub&&vPub&&vPri){ try{webpush.setVapidDetails(vSub,vPub,vPri);vapidKeysConfigured=true;console.log('[VAPID] Configured.');}catch(e){console.error('[VAPID] Setup Error:',e);} }else{console.warn('[VAPID] Missing env vars.');} }catch(e){console.error('[VAPID] Env Access Error:',e);} console.log(`[VAPID] Configured: ${vapidKeysConfigured}`);
       const providedApiKey = req.headers['x-api-key']; const expectedApiKey = process.env.EXPECTED_API_KEY; if (!providedApiKey || providedApiKey !== expectedApiKey) { return res.status(401).json({ error: '認証に失敗しました。APIキーが無効です。' }); }
-
-      try { // Main try block for POST logic
+      try {
           const reportData = req.body;
-          console.log('Received report data:', reportData);
-
-          // Validation
-          if (!reportData || !reportData.report_date || !reportData.store_name) {
-              return res.status(400).json({ error: '必須項目（日付、店舗名など）が不足しています。' });
-          }
-
-          // Generate Document ID
+          if (!reportData || !reportData.report_date || !reportData.store_name) { return res.status(400).json({ error: '必須項目（日付、店舗名など）が不足しています。' }); }
           let documentId;
-          try {
-              documentId = createReportId(reportData.report_date, reportData.store_name);
-              console.log(`Using document ID for reports collection: ${documentId}`);
-          } catch (idError) {
-              console.error("Error creating document ID:", idError);
-              return res.status(400).json({ error: `日報IDの生成に失敗: ${idError.message}` });
-          }
-
-          // Prepare Payload
-          const reportPayload = {
-              report_date: reportData.report_date, store_name: reportData.store_name,
-              sales_amount: Number(reportData.sales_amount) || 0,
-              daily_target_amount: Number(reportData.daily_target_amount) || 0,
-              visitor_count: Number(reportData.visitor_count) || 0,
-              new_customer_count: Number(reportData.new_customer_count) || 0,
-              dye_customer_count: Number(reportData.dye_customer_count) || 0,
-              discount_amount: Number(reportData.discount_amount) || 0,
-              comment: reportData.comment || null,
-              monthly_target_amount: Number(reportData.monthly_target_amount) || 0,
-              createdAt: admin.firestore.FieldValue.serverTimestamp()
-          };
-
-          // Save to Firestore using set() for overwrite
+          try { documentId = createReportId(reportData.report_date, reportData.store_name); } catch (idError) { return res.status(400).json({ error: `日報IDの生成に失敗: ${idError.message}` }); }
+          const reportPayload = { report_date: reportData.report_date, store_name: reportData.store_name, sales_amount: Number(reportData.sales_amount) || 0, daily_target_amount: Number(reportData.daily_target_amount) || 0, visitor_count: Number(reportData.visitor_count) || 0, new_customer_count: Number(reportData.new_customer_count) || 0, dye_customer_count: Number(reportData.dye_customer_count) || 0, discount_amount: Number(reportData.discount_amount) || 0, comment: reportData.comment || null, monthly_target_amount: Number(reportData.monthly_target_amount) || 0, createdAt: admin.firestore.FieldValue.serverTimestamp() };
           const docRef = db.collection('reports').doc(documentId);
           await docRef.set(reportPayload);
           console.log('Report document written/overwritten with ID: ', documentId);
-
-          // ★★★ Push Notification Sending (Check vapidKeysConfigured flag) ★★★
           console.log('Attempting to send push notifications...');
-          if (vapidKeysConfigured) { // Check the flag set by the VAPID setup logic above
-              console.log('VAPID keys configured, proceeding...');
-              try { // Add try-catch around push logic as well
-                  const subscriptionsSnapshot = await db.collection('pushSubscriptions').get();
-                  if (subscriptionsSnapshot.empty) {
-                      console.log('No push subscriptions found.');
-                  } else {
-                      console.log(`Found ${subscriptionsSnapshot.size} subscriptions...`);
-                      const notificationPayload = JSON.stringify({
-                          title: `[${reportPayload.store_name}] 新しい日報`,
-                          body: `売上: ${reportPayload.sales_amount.toLocaleString()}円 (日次目標: ${reportPayload.daily_target_amount.toLocaleString()}円)`
-                      });
-                      const sendPromises = [];
-                      subscriptionsSnapshot.forEach(doc => {
-                          const subRecord = doc.data();
-                          if (subRecord.subscription && subRecord.subscription.endpoint) {
-                              console.log(`Sending to ${subRecord.subscription.endpoint.substring(0,40)}...`);
-                              sendPromises.push(
-                                  webpush.sendNotification(subRecord.subscription, notificationPayload)
-                                      .catch(err => {
-                                          console.error(`Failed push to ${subRecord.subscription.endpoint.substring(0,40)} Err: ${err.statusCode}`);
-                                          if (err.statusCode === 404 || err.statusCode === 410) {
-                                              console.log(`Deleting invalid/expired subscription: ${doc.id}`);
-                                              return doc.ref.delete(); // Attempt to delete invalid subscription
-                                          }
-                                      })
-                              );
-                          } else {
-                              console.warn(`Invalid subscription document found: ${doc.id}`);
-                          }
-                      });
-                      const results = await Promise.allSettled(sendPromises);
-                      console.log('Push notification send results:', results.map(r => r.status));
-                  }
-              } catch (pushError) {
-                  console.error("Error during push notification process:", pushError);
-                  // Continue to return success for the report POST even if push fails
-              }
-          } else {
-              // This log should now only appear if VAPID setup actually failed
-              console.warn('VAPID keys were NOT configured correctly, skipping push notifications.');
-          }
-
-          // Return success response for the POST request
+          if (vapidKeysConfigured) {
+             console.log('VAPID keys configured, proceeding...');
+             try { const subs = await db.collection('pushSubscriptions').get(); if(subs.empty){console.log('No subs.');}else{console.log(`Found ${subs.size} subs.`); const payload=JSON.stringify({title:`[${reportPayload.store_name}] 新しい日報`,body:`売上: ${reportPayload.sales_amount.toLocaleString()}円`}); const promises=[]; subs.forEach(doc=>{const sub=doc.data().subscription; if(sub?.endpoint){promises.push(webpush.sendNotification(sub,payload).catch(err=>{console.error(`Push failed ${err.statusCode}`); if(err.statusCode===404||err.statusCode===410){doc.ref.delete();}}));}}); await Promise.allSettled(promises);}} catch(e){console.error('Push Error:',e);}
+          } else { console.warn('VAPID keys NOT configured correctly, skipping.'); }
           return res.status(201).json({ message: '日報を受け付けました (同じ日付/店舗の場合は上書きされます)。', reportId: documentId });
-
-      } catch (error) { // Catch for main POST try block
+       } catch (error) {
           console.error('[POST /api/v1/reports] Error processing report request:', error);
           return res.status(500).json({ error: `サーバー内部でエラーが発生しました: ${error.message}` });
-      }
+       }
       // --- End of POST Handler ---
-
   } else {
-      // --- Handle Other Methods (変更なし) ---
+      // --- Handle Other Methods ---
       res.setHeader('Allow', ['GET', 'POST']);
       return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
   }
