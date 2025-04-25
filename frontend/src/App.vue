@@ -125,6 +125,21 @@ const calculatedOverallTarget = computed(() => {
   return 0;
 });
 
+// ★★★ 全店舗の売上合計を計算する computed プロパティ ★★★
+const calculatedOverallSales = computed(() => {
+  if (storesSummaryData.value && typeof storesSummaryData.value === 'object' && Object.keys(storesSummaryData.value).length > 0) {
+    // storesSummaryData の各店舗の sales_amount を合計する
+    return Object.values(storesSummaryData.value).reduce((total, storeSummary) => {
+      const sales = (storeSummary && typeof storeSummary.sales_amount === 'number') ? storeSummary.sales_amount : 0;
+      return total + sales;
+    }, 0); // 初期値は 0
+  }
+  // データがない場合は 0 を返す
+  return 0;
+});
+// ★★★ ここまで ★★★
+
+
 // ログイン処理関数
 async function handleLogin() {
   authError.value = null;
@@ -196,6 +211,10 @@ onMounted(() => {
       <div v-else-if="fetchError" style="color: red;">集計データの読み込みエラー: {{ fetchError }}</div>
       <div v-else-if="Object.keys(storesSummaryData).length > 0">
         <p><strong>全体の月間目標 (合計):</strong> {{ calculatedOverallTarget?.toLocaleString() ?? 'N/A' }} 円</p>
+        <p><strong>全体の月間売上 (合計):</strong> {{ calculatedOverallSales?.toLocaleString() ?? 'N/A' }} 円</p>
+        <p v-if="calculatedOverallTarget > 0">
+          <strong>全体の達成率:</strong> {{ ((calculatedOverallSales / calculatedOverallTarget) * 100).toFixed(1) }} %
+        </p>
         <p v-if="summaryLastUpdatedData"><small>最終集計日時: {{ formatDateTime(summaryLastUpdatedData) }}</small></p>
         <div class="store-summary-cards">
           <div v-for="(summary, storeName) in storesSummaryData"
@@ -206,16 +225,7 @@ onMounted(() => {
             <h3>{{ storeName }}</h3>
             <p><strong>売上:</strong> {{ summary.sales_amount?.toLocaleString() ?? 'N/A' }} 円</p>
             <p><strong>日次目標計:</strong> {{ summary.daily_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
-            <p>
-              <strong>売上差額<small>(対 日次目標計)</small>:</strong>
-              <span v-if="typeof summary.sales_amount === 'number' && typeof summary.daily_target_amount === 'number'">
-                <span :style="{ color: (summary.sales_amount - summary.daily_target_amount) >= 0 ? 'blue' : 'red', fontWeight: 'bold' }">
-                  {{ (summary.sales_amount - summary.daily_target_amount) >= 0 ? '+' : '' }}
-                  {{ (summary.sales_amount - summary.daily_target_amount).toLocaleString() }} 円
-                </span>
-              </span>
-              <span v-else>計算不可</span>
-            </p>
+            <p><strong>売上差額<small>(対 日次目標計)</small>:</strong> <span v-if="typeof summary.sales_amount === 'number' && typeof summary.daily_target_amount === 'number'"><span :style="{ color: (summary.sales_amount - summary.daily_target_amount) >= 0 ? 'blue' : 'red', fontWeight: 'bold' }">{{ (summary.sales_amount - summary.daily_target_amount) >= 0 ? '+' : '' }}{{ (summary.sales_amount - summary.daily_target_amount).toLocaleString() }} 円</span></span><span v-else>計算不可</span> </p>
             <p><strong>客数:</strong> {{ summary.visitor_count ?? 'N/A' }} 人 (新規: {{ summary.new_customer_count ?? 'N/A' }}, 染め: {{ summary.dye_customer_count ?? 'N/A' }})</p>
             <p><strong>値引計:</strong> {{ summary.discount_amount?.toLocaleString() ?? 'N/A' }} 円</p>
             <p><strong>月間目標:</strong> {{ summary.monthly_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
