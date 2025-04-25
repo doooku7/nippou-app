@@ -1,31 +1,130 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue';
-// グラフコンポーネントをインポート
-import StoreSalesChart from './components/StoreSalesChart.vue'; // パスを確認
-
-// ★ Firebase Auth 関連をインポート ★
-import { auth } from './firebaseConfig'; // 作成した設定ファイルをインポート
+import StoreSalesChart from './components/StoreSalesChart.vue';
+import { auth } from './firebaseConfig';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from "firebase/auth";
 
-// --- Notification Subscription Logic (変更なし) ---
+// --- Notification Subscription Logic ---
 const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
 const subscriptionStatus = ref('');
 // const isSubscribed = ref(false); // 必要ならコメント解除
+
+// --- ここから修正・追加 ---
+
+// Service Worker を登録する関数
+async function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) {
+    console.warn('Service Worker is not supported.');
+    return null; // Service Worker がサポートされていない場合は何もしない
+  }
+  try {
+    console.log('Registering service worker...');
+    // ★ アプリ起動時に Service Worker を登録 ★
+    const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' }); // scope を明示的に指定すると良い場合がある
+    console.log('Service Worker registered:', registration);
+
+    // Service Worker が有効になるのを待つ (ready プロパティを使用)
+    await navigator.serviceWorker.ready;
+    console.log('Service Worker ready.');
+    return registration; // 登録オブジェクトを返す
+
+  } catch (error) {
+    console.error('Service Worker registration failed:', error);
+    subscriptionStatus.value = 'Service Workerの登録に失敗しました。';
+    return null;
+  }
+}
+
+// プッシュ通知の購読を開始する関数 (ボタンクリック時に呼ばれる)
+async function subscribeToNotifications() {
+  subscriptionStatus.value = '処理中...';
+
+  if (!('PushManager' in window)) {
+    subscriptionStatus.value = 'エラー: プッシュ通知はこのブラウザではサポートされていません。';
+    console.error('Push messaging is not supported');
+    return;
+  }
+
+  // Service Worker が有効になるのを待つ
+  const registration = await navigator.serviceWorker.ready;
+  if (!registration) {
+      subscriptionStatus.value = 'エラー: Service Workerが有効ではありません。';
+      console.error('Service Worker not ready for push subscription.');
+      return;
+  }
+
+  try {
+    console.log('Requesting notification permission...');
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      subscriptionStatus.value = '通知の許可が得られませんでした。';
+      console.error('Permission not granted for Notification');
+      return;
+    }
+    console.log('Notification permission granted.');
+
+    console.log('Subscribing to push manager...');
+    if (!vapidPublicKey) {
+      subscriptionStatus.value = 'エラー: VAPID公開鍵が設定されていません(env)。';
+      console.error('VAPID public key is not defined. Check VITE_VAPID_PUBLIC_KEY env var.');
+      return;
+    }
+    console.log('VAPID Public Key from env for subscribe:', vapidPublicKey);
+
+    const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey);
+    const subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: applicationServerKey
+    });
+    console.log('User is subscribed:', subscription);
+
+    console.log('Sending subscription to server...');
+    // ★ サーバーへの送信先APIエンドポイントを確認してください ★
+    //    以前は `/api/v1/subscribe` でしたが、Firebase等を使う場合は
+    //    Firebase Cloud Functions などのエンドポイントになる可能性があります。
+    const response = await fetch('/api/v1/subscribe', { // ←★ エンドポイント確認！
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // ★ 認証が必要な場合はトークンもヘッダーに追加 ★
+        // 'Authorization': `Bearer ${await currentUser.value?.getIdToken()}`
+      },
+      body: JSON.stringify({ subscription: subscription }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: '不明なサーバーエラー' }));
+      throw new Error(`サーバーエラー: ${response.status} ${response.statusText} - ${errorData.error}`);
+    }
+    const result = await response.json();
+    console.log('Server response:', result);
+    subscriptionStatus.value = `購読に成功しました！ (${result.message || '完了'})`;
+
+  } catch (error) {
+    console.error('Error during subscription process:', error);
+    // エラーメッセージの重複を避ける
+    if (!subscriptionStatus.value.startsWith('エラー') && !subscriptionStatus.value.startsWith('購読中にエラー')) {
+        subscriptionStatus.value = `エラーが発生しました: ${error.message}`;
+    } else if (!subscriptionStatus.value.includes(error.message)) {
+        // 既存のエラーメッセージに追加する場合 (長くなる可能性あり)
+        // subscriptionStatus.value += ` ${error.message}`;
+    }
+    // 具体的な購読エラーの場合
+    if (error.name === 'AbortError' || error.message.includes('subscribe')) {
+        subscriptionStatus.value = `購読中にエラーが発生しました: ${error.message}`;
+    }
+  }
+}
+
+// Base64をUint8Arrayに変換する関数 (変更なし)
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - base64String.length % 4) % 4); const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/'); const rawData = window.atob(base64); const outputArray = new Uint8Array(rawData.length); for (let i = 0; i < rawData.length; ++i) { outputArray[i] = rawData.charCodeAt(i); } return outputArray;
 }
-/*
-async function checkSubscriptionStatus() {
-  // ... (必要なら実装) ...
-}
-*/
-async function subscribeToNotifications() {
-  // ... (通知購読のロジックは変更なし) ...
-  subscriptionStatus.value = '処理中...'; if (!('serviceWorker' in navigator) || !('PushManager' in window)) { subscriptionStatus.value = 'エラー: プッシュ通知はこのブラウザではサポートされていません。'; console.error('Push messaging is not supported'); return; } try { console.log('Registering service worker...'); const registration = await navigator.serviceWorker.register('/sw.js'); console.log('Service Worker registered:', registration); await navigator.serviceWorker.ready; console.log('Service Worker ready.'); console.log('Requesting notification permission...'); const permission = await Notification.requestPermission(); if (permission !== 'granted') { subscriptionStatus.value = '通知の許可が得られませんでした。'; console.error('Permission not granted for Notification'); return; } console.log('Notification permission granted.'); console.log('Subscribing to push manager...'); if (!vapidPublicKey) { subscriptionStatus.value = 'エラー: VAPID公開鍵が設定されていません(env)。'; console.error('VAPID public key is not defined. Check VITE_VAPID_PUBLIC_KEY env var.'); return; } console.log('VAPID Public Key from env for subscribe:', vapidPublicKey); let subscription; try { const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey); subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: applicationServerKey }); console.log('User is subscribed:', subscription); } catch (subscribeError) { console.error('Error during pushManager.subscribe:', subscribeError); subscriptionStatus.value = `購読中にエラーが発生しました: ${subscribeError.message}`; return; } console.log('Sending subscription to server...'); const response = await fetch('/api/v1/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json', }, body: JSON.stringify({ subscription: subscription }), }); if (!response.ok) { const errorData = await response.json(); throw new Error(`サーバーエラー: ${response.status} ${response.statusText} - ${errorData.error || '不明なエラー'}`); } const result = await response.json(); console.log('Server response:', result); subscriptionStatus.value = `購読に成功しました！ (${result.message})`; } catch (error) { if (!subscriptionStatus.value.includes('購読中にエラー')) { subscriptionStatus.value = `エラーが発生しました: ${error.message}`; } console.error('Error during subscription process:', error); }
-}
-// --- End Notification Subscription Logic ---
 
-// --- Report Display Logic ---
+// --- ここまで修正・追加 ---
+
+
+// --- Report Display Logic (変更なし) ---
 const reports = ref([]);
 const storesSummaryData = ref({});
 const summaryLastUpdatedData = ref(null);
@@ -33,24 +132,21 @@ const isLoading = ref(true);
 const fetchError = ref(null);
 const selectedStore = ref(null);
 
-// Firebase Auth 関連
 const email = ref('');
 const password = ref('');
 const authError = ref(null);
 const currentUser = ref(null);
 
-// 表示対象の年月を管理
 const now = new Date();
 const displayYear = ref(now.getFullYear());
-const displayMonth = ref(now.getMonth() + 1); // 1-12
+const displayMonth = ref(now.getMonth() + 1);
 
-// 日付フォーマット関数
 function formatDateTime(isoString) {
   if (!isoString) return 'N/A'; try { const date = new Date(isoString); return date.toLocaleString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }); } catch (e) { console.error("Error formatting date:", e); return isoString; }
 }
 
-// API呼び出し関数 (年月指定対応済み)
 async function fetchApiData(year = displayYear.value, month = displayMonth.value) {
+  // ... (fetchApiData 関数の内容は変更なし) ...
   isLoading.value = true;
   fetchError.value = null;
   reports.value = [];
@@ -58,12 +154,12 @@ async function fetchApiData(year = displayYear.value, month = displayMonth.value
   summaryLastUpdatedData.value = null;
   selectedStore.value = null;
 
-  console.log(`Fetching data for ${year}-${month}...`);
+  console.log(`Workspaceing data for ${year}-${month}...`);
   try {
     if (!currentUser.value) { throw new Error('ユーザーがログインしていません。'); }
     const idToken = await currentUser.value.getIdToken();
     const headers = { 'Authorization': `Bearer ${idToken}` };
-    const apiUrl = `/api/v1/reports?year=${year}&month=${month}`;
+    const apiUrl = `/api/v1/reports?year=${year}&month=${month}`; // ★ APIエンドポイント確認
     const response = await fetch(apiUrl, { headers: headers });
 
     if (!response.ok) {
@@ -90,8 +186,8 @@ async function fetchApiData(year = displayYear.value, month = displayMonth.value
   }
 }
 
-// 日付順ソート用 computed (降順)
 const sortedReports = computed(() => {
+  // ... (変更なし) ...
   if (!reports.value || reports.value.length === 0) { return []; }
   return [...reports.value].sort((a, b) => {
     try {
@@ -103,19 +199,18 @@ const sortedReports = computed(() => {
   });
 });
 
-// フィルター用関数
 function filterByStore(storeName) {
   selectedStore.value = (selectedStore.value === storeName) ? null : storeName;
 }
 
-// フィルターされたレポートリスト用 computed
 const filteredAndSortedReports = computed(() => {
+  // ... (変更なし) ...
   if (!selectedStore.value) { return sortedReports.value; }
   return sortedReports.value.filter(report => report.store_name === selectedStore.value);
 });
 
-// 全店舗の月間目標合計 computed
 const calculatedOverallTarget = computed(() => {
+  // ... (変更なし) ...
   if (storesSummaryData.value && typeof storesSummaryData.value === 'object' && Object.keys(storesSummaryData.value).length > 0) {
     return Object.values(storesSummaryData.value).reduce((total, storeSummary) => {
       const target = (storeSummary && typeof storeSummary.monthly_target_amount === 'number') ? storeSummary.monthly_target_amount : 0;
@@ -125,23 +220,19 @@ const calculatedOverallTarget = computed(() => {
   return 0;
 });
 
-// ★★★ 全店舗の売上合計を計算する computed プロパティ ★★★
 const calculatedOverallSales = computed(() => {
+  // ... (変更なし) ...
   if (storesSummaryData.value && typeof storesSummaryData.value === 'object' && Object.keys(storesSummaryData.value).length > 0) {
-    // storesSummaryData の各店舗の sales_amount を合計する
     return Object.values(storesSummaryData.value).reduce((total, storeSummary) => {
       const sales = (storeSummary && typeof storeSummary.sales_amount === 'number') ? storeSummary.sales_amount : 0;
       return total + sales;
-    }, 0); // 初期値は 0
+    }, 0);
   }
-  // データがない場合は 0 を返す
   return 0;
 });
-// ★★★ ここまで ★★★
 
-
-// ログイン処理関数
 async function handleLogin() {
+  // ... (変更なし) ...
   authError.value = null;
   try {
     const userCredential = await signInWithEmailAndPassword(auth, email.value, password.value);
@@ -149,18 +240,19 @@ async function handleLogin() {
   } catch (error) { authError.value = `ログイン失敗。(${error.code})`; }
 }
 
-// ログアウト処理関数
 async function handleLogout() {
+  // ... (変更なし) ...
   try { await signOut(auth); } catch (error) { console.error("Logout failed:", error); }
 }
 
-// 前月/次月 データ取得関数
 function fetchPreviousMonth() {
+  // ... (変更なし) ...
   let prevYear = displayYear.value; let prevMonth = displayMonth.value - 1;
   if (prevMonth < 1) { prevMonth = 12; prevYear--; }
   fetchApiData(prevYear, prevMonth);
 }
 function fetchNextMonth() {
+  // ... (変更なし) ...
   let nextYear = displayYear.value; let nextMonth = displayMonth.value + 1;
   if (nextMonth > 12) { nextMonth = 1; nextYear++; }
   const currentYear = now.getFullYear(); const currentMonth = now.getMonth() + 1;
@@ -168,17 +260,36 @@ function fetchNextMonth() {
   fetchApiData(nextYear, nextMonth);
 }
 const isNextMonthDisabled = computed(() => {
+  // ... (変更なし) ...
   const currentYear = now.getFullYear(); const currentMonth = now.getMonth() + 1;
   return (displayYear.value >= currentYear && displayMonth.value >= currentMonth);
 });
 
+
 // マウント時処理
 onMounted(() => {
+  // ★ Service Worker の登録を onMounted で呼び出す ★
+  registerServiceWorker();
+
+  // 認証状態の監視 (変更なし)
   onAuthStateChanged(auth, (user) => {
     currentUser.value = user;
-    isLoading.value = false;
-    if (user) { fetchApiData(); }
-    else { reports.value = []; storesSummaryData.value = {}; summaryLastUpdatedData.value = null; fetchError.value = null; selectedStore.value = null; }
+    isLoading.value = false; // 認証状態が決まったらローディング解除
+    if (user) {
+      fetchApiData(); // ログインしていたらデータを取得
+    }
+    else {
+      // ログアウト状態の処理
+      reports.value = [];
+      storesSummaryData.value = {};
+      summaryLastUpdatedData.value = null;
+      fetchError.value = null;
+      selectedStore.value = null;
+      email.value = ''; // ログインフォームの入力値をクリア (任意)
+      // password.value = ''; // パスワードはセキュリティ上クリアしない方が良い場合も
+      authError.value = null; // ログインエラー表示をクリア
+      subscriptionStatus.value = ''; // 通知ステータスもクリア
+    }
   });
 });
 // --- End Report Display Logic ---
@@ -207,7 +318,7 @@ onMounted(() => {
           <button @click="fetchNextMonth" :disabled="isLoading || isNextMonthDisabled" class="nav-button">次月 ＞</button>
         </div>
       </div>
-      <div v-if="isLoading">集計データを読み込み中...</div>
+      <div v-if="isLoading && !currentUser">認証状態を確認中...</div> <div v-else-if="isLoading && currentUser">集計データを読み込み中...</div>
       <div v-else-if="fetchError" style="color: red;">集計データの読み込みエラー: {{ fetchError }}</div>
       <div v-else-if="Object.keys(storesSummaryData).length > 0">
         <p><strong>全体の月間目標 (合計):</strong> {{ calculatedOverallTarget?.toLocaleString() ?? 'N/A' }} 円</p>
@@ -285,6 +396,7 @@ onMounted(() => {
 
 <style scoped>
   /* スタイル部分は変更なし */
+  /* ... (style の内容は変更なし) ... */
   .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 10px; }
   .month-nav-buttons button { margin-left: 5px; padding: 6px 12px; font-size: 0.9em; }
   .month-nav-buttons button:disabled { opacity: 0.5; cursor: not-allowed; }
