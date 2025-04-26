@@ -11,6 +11,7 @@
   "description": "",
   "dependencies": {
     "firebase-admin": "^13.2.0",
+    "pulltorefreshjs": "^0.1.22",
     "web-push": "^3.6.7"
   }
 }

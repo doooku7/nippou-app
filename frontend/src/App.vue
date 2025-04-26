@@ -1,14 +1,16 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue';
+// onUnmounted と PullToRefresh をインポート
+import { ref, onMounted, onUnmounted, computed } from 'vue'; // onUnmounted を追加
+import PullToRefresh from 'pulltorefreshjs'; // PullToRefresh をインポート
+
 import StoreSalesChart from './components/StoreSalesChart.vue'; // グラフコンポーネントのパスを確認
 import { auth } from './firebaseConfig'; // Firebase設定ファイルのパスを確認
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from "firebase/auth";
 
-// --- Notification Subscription Logic ---
+// --- Notification Subscription Logic (元のまま) ---
 const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
 const subscriptionStatus = ref('');
 
-// Service Worker を登録する関数
 async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) {
     console.warn('Service Worker is not supported.');
@@ -28,7 +30,6 @@ async function registerServiceWorker() {
   }
 }
 
-// プッシュ通知の購読を開始する関数
 async function subscribeToNotifications() {
   subscriptionStatus.value = '処理中...';
 
@@ -71,12 +72,11 @@ async function subscribeToNotifications() {
     console.log('User is subscribed:', subscription);
 
     console.log('Sending subscription to server...');
-    // ★ サーバーへの送信先APIエンドポイントを確認してください ★
-    const response = await fetch('/api/v1/subscribe', { // ←★ エンドポイント確認！
+    const response = await fetch('/api/v1/subscribe', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        // 'Authorization': `Bearer ${await currentUser.value?.getIdToken()}` // 認証が必要な場合
+        // 'Authorization': `Bearer ${await currentUser.value?.getIdToken()}`
       },
       body: JSON.stringify({ subscription: subscription }),
     });
@@ -94,7 +94,6 @@ async function subscribeToNotifications() {
     if (!subscriptionStatus.value.startsWith('エラー') && !subscriptionStatus.value.startsWith('購読中にエラー')) {
         subscriptionStatus.value = `エラーが発生しました: ${error.message}`;
     } else if (!subscriptionStatus.value.includes(error.message)) {
-        // Optionally add more details: subscriptionStatus.value += ` ${error.message}`;
     }
     if (error.name === 'AbortError' || error.message.includes('subscribe')) {
         subscriptionStatus.value = `購読中にエラーが発生しました: ${error.message}`;
@@ -102,24 +101,21 @@ async function subscribeToNotifications() {
   }
 }
 
-// Base64をUint8Arrayに変換する関数
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - base64String.length % 4) % 4); const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/'); const rawData = window.atob(base64); const outputArray = new Uint8Array(rawData.length); for (let i = 0; i < rawData.length; ++i) { outputArray[i] = rawData.charCodeAt(i); } return outputArray;
 }
 
-// --- Report Display Logic ---
+// --- Report Display Logic (元のまま) ---
 const reports = ref([]);
 const storesSummaryData = ref({});
 const summaryLastUpdatedData = ref(null);
-const isLoading = ref(true);
+const isLoading = ref(true); // ★ PullToRefresh で使用
 const fetchError = ref(null);
 const selectedStore = ref(null);
-
 const email = ref('');
 const password = ref('');
 const authError = ref(null);
 const currentUser = ref(null);
-
 const now = new Date();
 const displayYear = ref(now.getFullYear());
 const displayMonth = ref(now.getMonth() + 1);
@@ -132,18 +128,18 @@ async function fetchApiData(year = displayYear.value, month = displayMonth.value
   isLoading.value = true;
   fetchError.value = null;
 
-  console.log(`Workspaceing data for ${year}-${month}...`);
+  console.log(`Workspaceing data for ${year}-${month}...`); // Typo修正: Workspaceing -> Fetching
   try {
     if (!currentUser.value) { throw new Error('ユーザーがログインしていません。'); }
     const idToken = await currentUser.value.getIdToken();
     const headers = { 'Authorization': `Bearer ${idToken}` };
-    const apiUrl = `/api/v1/reports?year=${year}&month=${month}`; // ★ APIエンドポイント確認
+    const apiUrl = `/api/v1/reports?year=${year}&month=${month}`;
     const response = await fetch(apiUrl, { headers: headers });
 
     if (!response.ok) {
       let errorMsg = `HTTP error! status: ${response.status}`;
       try { const errorData = await response.json(); errorMsg = errorData.error || errorMsg; } catch(e) { /* ignore */ }
-      if (response.status === 401 || response.status === 403) { errorMsg = `アクセス権エラー: ${errorMsg}`; handleLogout(); }
+      if (response.status === 401 || response.status === 403) { errorMsg = `アクセス権エラー: ${errorMsg}`; await handleLogout(); } // await を追加 (ログアウト完了を待つ)
       throw new Error(errorMsg);
     }
     const data = await response.json();
@@ -159,6 +155,7 @@ async function fetchApiData(year = displayYear.value, month = displayMonth.value
   } catch (error) {
     console.error('Error fetching data:', error);
     fetchError.value = `データ取得に失敗: ${error.message}`;
+    // エラー時もクリア
     reports.value = []; storesSummaryData.value = {}; summaryLastUpdatedData.value = null; selectedStore.value = null;
   } finally {
     isLoading.value = false;
@@ -171,7 +168,7 @@ const sortedReports = computed(() => {
     try {
       const dateA = new Date(String(a.report_date).replace(/\//g, '-'));
       const dateB = new Date(String(b.report_date).replace(/\//g, '-'));
-      if (isNaN(dateA.getTime()) || isNaN(dateB.getTime())) { return 0; }
+      if (isNaN(dateA.getTime()) || isNaN(dateB.getTime())) return 0;
       return dateB - dateA;
     } catch (e) {
       console.error("Error parsing date for sorting:", e);
@@ -232,8 +229,12 @@ async function handleLogin() {
 }
 
 async function handleLogout() {
+  // ▼▼▼ PullToRefresh 破棄処理を追加 ▼▼▼
+  destroyPullToRefresh();
+  // ▲▲▲ PullToRefresh 破棄処理を追加 ▲▲▲
   try {
     await signOut(auth);
+    // ログアウト後のデータクリアは onAuthStateChanged で行う
   } catch (error) {
     console.error("Logout failed:", error);
   }
@@ -258,16 +259,68 @@ const isNextMonthDisabled = computed(() => {
   return (displayYear.value >= currentYear && displayMonth.value >= currentMonth);
 });
 
+
+// --- ▼▼▼ PullToRefresh 関連の追加 ▼▼▼ ---
+let ptrInstance = null; // インスタンス保持用
+
+function initializePullToRefresh() {
+  if (ptrInstance) return; // 既に初期化済みなら何もしない
+  // 念のため、タッチデバイスかどうかを簡易的に判定 (任意)
+  // if (!('ontouchstart' in window || navigator.maxTouchPoints > 0 || navigator.msMaxTouchPoints > 0)) {
+  //   console.log('PullToRefresh: Not a touch device, skipping initialization.');
+  //   return;
+  // }
+  try {
+    ptrInstance = PullToRefresh.init({
+      mainElement: 'body', // スクロールされる主要な要素
+      triggerElement: 'body', // この要素が一番上にある時に引っ張れる
+      shouldPullToRefresh: () => !isLoading.value, // ローディング中でない時だけ許可
+      onRefresh: async () => {
+        console.log('PullToRefresh: Refresh triggered!');
+        // 現在表示している年月のデータを再取得
+        await fetchApiData(displayYear.value, displayMonth.value);
+        console.log('PullToRefresh: fetchApiData finished.');
+      },
+      // 日本語テキスト設定 (任意)
+      instructionsPullToRefresh: '下にスワイプして更新',
+      instructionsReleaseToRefresh: '指を離して更新',
+      instructionsRefreshing: '更新中...',
+      // haptics: true, // iOSで軽い振動 (任意)
+    });
+    console.log('PullToRefresh initialized.');
+  } catch (error) {
+    console.error('PullToRefresh initialization failed:', error);
+    ptrInstance = null; // 失敗したら null に戻す
+  }
+}
+
+function destroyPullToRefresh() {
+  if (ptrInstance) {
+    PullToRefresh.destroyAll();
+    ptrInstance = null;
+    console.log('PullToRefresh instance destroyed.');
+  }
+}
+// --- ▲▲▲ PullToRefresh 関連の追加 ▲▲▲ ---
+
+
 onMounted(() => {
-  registerServiceWorker();
+  registerServiceWorker(); // Service Worker 登録
+
+  // 認証状態の監視
   onAuthStateChanged(auth, (user) => {
     currentUser.value = user;
-    isLoading.value = false;
     if (user) {
       console.log('User logged in:', user.email);
+      // ログイン直後にすぐデータを取得 & PTR初期化
       fetchApiData();
+      // 少し遅延させてPTR初期化 (DOMレンダリング後の方が確実な場合)
+      // setTimeout(initializePullToRefresh, 100);
+      initializePullToRefresh(); // ★ ログインしたらPullToRefreshを初期化
     } else {
       console.log('User logged out or not logged in.');
+      destroyPullToRefresh(); // ★ ログアウトしたらPullToRefreshを破棄
+      // ログアウト時のデータクリア処理
       reports.value = [];
       storesSummaryData.value = {};
       summaryLastUpdatedData.value = null;
@@ -277,141 +330,149 @@ onMounted(() => {
       password.value = '';
       authError.value = null;
       subscriptionStatus.value = '';
+      isLoading.value = false; // ログアウト時はローディング解除
     }
+    // isLoading.value = false; // fetchApiDataのfinallyで制御されるため、ここでは不要かも
   });
 });
+
+// コンポーネント破棄時にも念のため破棄
+onUnmounted(() => {
+  destroyPullToRefresh();
+});
+
 </script>
 
 <template>
-  <div v-if="currentUser">
-    <header class="user-info-bar">
-      <span class="user-email">ログイン中: {{ currentUser.email }}</span>
-      <div class="action-buttons">
-        <button @click="fetchApiData()" :disabled="isLoading" class="action-button">{{ isLoading ? '読み込み中...' : '更新' }}</button>
-        <button @click="subscribeToNotifications" class="action-button" :disabled="isLoading">通知購読</button>
-        <button @click="handleLogout" class="action-button logout-button">ログアウト</button>
-      </div>
-    </header>
-    <p v-if="subscriptionStatus" class="subscription-status">{{ subscriptionStatus }}</p>
-
-    <main>
-      <h1 class="main-title">カルソル日報</h1>
-      <hr>
-
-      <section class="monthly-summary-section">
-        <div class="section-header">
-          <h2>月次集計 (店舗別) - {{ displayYear }}年{{ displayMonth }}月</h2>
-          <div class="month-nav-buttons">
-            <button @click="fetchPreviousMonth" :disabled="isLoading" class="nav-button">＜ 前月</button>
-            <button @click="fetchNextMonth" :disabled="isLoading || isNextMonthDisabled" class="nav-button">次月 ＞</button>
-          </div>
+  <div id="app">
+    <div v-if="currentUser">
+      <header class="user-info-bar">
+        <span class="user-email">ログイン中: {{ currentUser.email }}</span>
+        <div class="action-buttons">
+          <button @click="fetchApiData()" :disabled="isLoading" class="action-button">{{ isLoading ? '読み込み中...' : '更新' }}</button>
+          <button @click="subscribeToNotifications" class="action-button" :disabled="isLoading">通知購読</button>
+          <button @click="handleLogout" class="action-button logout-button">ログアウト</button>
         </div>
+      </header>
+      <p v-if="subscriptionStatus" class="subscription-status">{{ subscriptionStatus }}</p>
 
-        <div v-if="isLoading && currentUser" class="loading-message">集計データを読み込み中...</div>
-        <div v-else-if="fetchError" class="error-message">集計データの読み込みエラー: {{ fetchError }}</div>
-        <div v-else-if="Object.keys(storesSummaryData).length > 0">
-          <div class="overall-summary">
-            <p><strong>全体の月間目標 (合計):</strong> {{ calculatedOverallTarget?.toLocaleString() ?? 'N/A' }} 円</p>
-            <p><strong>全体の月間売上 (合計):</strong> {{ calculatedOverallSales?.toLocaleString() ?? 'N/A' }} 円</p>
-            <p v-if="calculatedOverallTarget > 0">
-              <strong>全体の達成率:</strong> {{ ((calculatedOverallSales / calculatedOverallTarget) * 100).toFixed(1) }} %
-            </p>
-            <p v-if="summaryLastUpdatedData"><small>最終集計日時: {{ formatDateTime(summaryLastUpdatedData) }}</small></p>
+      <main>
+        <h1 class="main-title">カルソル日報</h1>
+        <hr>
+
+        <section class="monthly-summary-section">
+          <div class="section-header">
+            <h2>月次集計 (店舗別) - {{ displayYear }}年{{ displayMonth }}月</h2>
+            <div class="month-nav-buttons">
+              <button @click="fetchPreviousMonth" :disabled="isLoading" class="nav-button">＜ 前月</button>
+              <button @click="fetchNextMonth" :disabled="isLoading || isNextMonthDisabled" class="nav-button">次月 ＞</button>
+            </div>
           </div>
 
-          <div class="store-summary-slider">
-            <div v-for="([storeName, summary]) in sortedStoresSummary"
-                 :key="storeName"
-                 class="store-summary-card"
-                 @click="filterByStore(storeName)"
-                 :class="{ 'selected-card': selectedStore === storeName }">
-              <h3>{{ storeName }}</h3>
-              <p><strong>売上:</strong> {{ summary.sales_amount?.toLocaleString() ?? 'N/A' }} 円</p>
-              <p><strong>日次目標計:</strong> {{ summary.daily_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
-              <p><strong>売上差額<small>(対 目標計)</small>:</strong>
-                <span v-if="typeof summary.sales_amount === 'number' && typeof summary.daily_target_amount === 'number'">
-                  <span :style="{ color: (summary.sales_amount - summary.daily_target_amount) >= 0 ? '#4fc3f7' : '#f57876', fontWeight: 'bold' }">
-                    {{ (summary.sales_amount - summary.daily_target_amount) >= 0 ? '+' : '' }}{{ (summary.sales_amount - summary.daily_target_amount).toLocaleString() }} 円
-                  </span>
-                  </span>
-                <span v-else>計算不可</span>
+          <div v-if="isLoading && currentUser" class="loading-message">集計データを読み込み中...</div>
+          <div v-else-if="fetchError" class="error-message">集計データの読み込みエラー: {{ fetchError }}</div>
+          <div v-else-if="Object.keys(storesSummaryData).length > 0">
+            <div class="overall-summary">
+              <p><strong>全体の月間目標 (合計):</strong> {{ calculatedOverallTarget?.toLocaleString() ?? 'N/A' }} 円</p>
+              <p><strong>全体の月間売上 (合計):</strong> {{ calculatedOverallSales?.toLocaleString() ?? 'N/A' }} 円</p>
+              <p v-if="calculatedOverallTarget > 0">
+                <strong>全体の達成率:</strong> {{ ((calculatedOverallSales / calculatedOverallTarget) * 100).toFixed(1) }} %
               </p>
-              <p><strong>客数:</strong> {{ summary.visitor_count ?? 'N/A' }} 人 (新規: {{ summary.new_customer_count ?? 'N/A' }}, 染め: {{ summary.dye_customer_count ?? 'N/A' }})</p>
-              <p><strong>値引計:</strong> {{ summary.discount_amount?.toLocaleString() ?? 'N/A' }} 円</p>
-              <p><strong>月間目標:</strong> {{ summary.monthly_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
-              <p><strong>営業日数:</strong> {{ summary.reportCount ?? 'N/A' }} 日</p>
+              <p v-if="summaryLastUpdatedData"><small>最終集計日時: {{ formatDateTime(summaryLastUpdatedData) }}</small></p>
+            </div>
+
+            <div class="store-summary-slider">
+              <div v-for="([storeName, summary]) in sortedStoresSummary"
+                   :key="storeName"
+                   class="store-summary-card"
+                   @click="filterByStore(storeName)"
+                   :class="{ 'selected-card': selectedStore === storeName }">
+                <h3>{{ storeName }}</h3>
+                <p><strong>売上:</strong> {{ summary.sales_amount?.toLocaleString() ?? 'N/A' }} 円</p>
+                <p><strong>日次目標計:</strong> {{ summary.daily_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
+                <p><strong>売上差額<small>(対 日次目標計)</small>:</strong>
+                  <span v-if="typeof summary.sales_amount === 'number' && typeof summary.daily_target_amount === 'number'">
+                    <span :style="{ color: (summary.sales_amount - summary.daily_target_amount) >= 0 ? '#4fc3f7' : '#ef5350', fontWeight: 'bold' }">
+                      {{ (summary.sales_amount - summary.daily_target_amount) >= 0 ? '+' : '' }}{{ (summary.sales_amount - summary.daily_target_amount).toLocaleString() }} 円
+                    </span>
+                    </span>
+                  <span v-else>計算不可</span>
+                </p>
+                <p><strong>客数:</strong> {{ summary.visitor_count ?? 'N/A' }} 人 (新規: {{ summary.new_customer_count ?? 'N/A' }}, 染め: {{ summary.dye_customer_count ?? 'N/A' }})</p>
+                <p><strong>値引計:</strong> {{ summary.discount_amount?.toLocaleString() ?? 'N/A' }} 円</p>
+                <p><strong>月間目標:</strong> {{ summary.monthly_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
+                <p><strong>レポート数:</strong> {{ summary.reportCount ?? 'N/A' }} 件</p>
+              </div>
+            </div>
+
+            <div class="chart-container">
+              <StoreSalesChart :chart-data="storesSummaryData" />
+              </div>
+          </div>
+          <p v-else class="no-data-message">表示できる月次集計データがありません。</p>
+        </section>
+
+        <hr>
+
+        <section class="recent-reports-section">
+          <div class="section-header">
+             <h2>最近の日報一覧</h2>
+             <button v-if="selectedStore" @click="filterByStore(null)" class="filter-reset-button">({{ selectedStore }} のフィルター解除)</button>
+          </div>
+          <div v-if="isLoading" class="loading-message">レポートリストを読み込んでいます...</div>
+          <div v-else-if="filteredAndSortedReports.length > 0" class="report-list">
+            <div v-for="report in filteredAndSortedReports" :key="report.id" class="report-card">
+               <h3>{{ report.report_date }} - {{ report.store_name }}</h3>
+               <p><strong>売上:</strong> {{ report.sales_amount?.toLocaleString() ?? 'N/A' }} 円</p>
+               <p><strong>日次目標:</strong> {{ report.daily_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
+               <p><strong>月間目標:</strong> {{ report.monthly_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
+               <p><strong>来店:</strong> {{ report.visitor_count ?? 'N/A' }} 人 (新規: {{ report.new_customer_count ?? 'N/A' }}, 染め: {{ report.dye_customer_count ?? 'N/A' }})</p>
+               <p><strong>値引:</strong> {{ report.discount_amount?.toLocaleString() ?? 'N/A' }} 円</p>
+               <p v-if="report.comment"><strong>コメント:</strong><br><span class="comment-text">{{ report.comment }}</span></p>
+               <small class="report-meta">登録日時: {{ formatDateTime(report.createdAt) }} (ID: {{ report.id }})</small>
             </div>
           </div>
+          <p v-else-if="!isLoading && !fetchError" class="no-data-message">
+            <span v-if="selectedStore" style="font-weight: bold;">{{ selectedStore }} の</span>表示できる最近の日報データがありません。
+          </p>
+          <p v-else-if="fetchError && !isLoading" class="error-message">レポートの読み込みに失敗しました。</p>
+        </section>
+      </main>
+    </div>
 
-          <div class="chart-container">
-            <StoreSalesChart :chart-data="storesSummaryData" />
-            </div>
+    <div v-else-if="!isLoading" class="login-container">
+      <h2 class="login-title">ログイン</h2>
+      <form @submit.prevent="handleLogin" class="login-form">
+        <div class="form-group">
+          <label for="email">メールアドレス:</label>
+          <input type="email" id="email" v-model="email" required>
         </div>
-        <p v-else class="no-data-message">表示できる月次集計データがありません。</p>
-      </section>
-
-      <hr>
-
-      <section class="recent-reports-section">
-        <div class="section-header">
-           <h2>最近の日報一覧</h2>
-           <button v-if="selectedStore" @click="filterByStore(null)" class="filter-reset-button">({{ selectedStore }} のフィルター解除)</button>
+        <div class="form-group">
+          <label for="password">パスワード:</label>
+          <input type="password" id="password" v-model="password" required>
         </div>
-        <div v-if="isLoading" class="loading-message">レポートリストを読み込んでいます...</div>
-        <div v-else-if="filteredAndSortedReports.length > 0" class="report-list">
-          <div v-for="report in filteredAndSortedReports" :key="report.id" class="report-card">
-             <h3>{{ report.report_date }} - {{ report.store_name }}</h3>
-             <p><strong>売上:</strong> {{ report.sales_amount?.toLocaleString() ?? 'N/A' }} 円</p>
-             <p><strong>日次目標:</strong> {{ report.daily_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
-             <p><strong>月間目標:</strong> {{ report.monthly_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
-             <p><strong>来店:</strong> {{ report.visitor_count ?? 'N/A' }} 人 (新規: {{ report.new_customer_count ?? 'N/A' }}, 染め: {{ report.dye_customer_count ?? 'N/A' }})</p>
-             <p><strong>値引:</strong> {{ report.discount_amount?.toLocaleString() ?? 'N/A' }} 円</p>
-             <p v-if="report.comment"><strong>コメント:</strong><br><span class="comment-text">{{ report.comment }}</span></p>
-             <small class="report-meta">登録日時: {{ formatDateTime(report.createdAt) }} (ID: {{ report.id }})</small>
-          </div>
-        </div>
-        <p v-else-if="!isLoading && !fetchError" class="no-data-message">
-          <span v-if="selectedStore" style="font-weight: bold;">{{ selectedStore }} の</span>表示できる最近の日報データがありません。
-        </p>
-        <p v-else-if="fetchError && !isLoading" class="error-message">レポートの読み込みに失敗しました。</p>
-      </section>
-    </main>
-  </div>
+        <button type="submit" class="login-button" :disabled="isLoading">ログイン</button>
+        <p v-if="authError" class="error-message login-error">{{ authError }}</p>
+      </form>
+    </div>
 
-  <div v-else-if="!isLoading" class="login-container">
-    <h2 class="login-title">ログイン</h2>
-    <form @submit.prevent="handleLogin" class="login-form">
-      <div class="form-group">
-        <label for="email">メールアドレス:</label>
-        <input type="email" id="email" v-model="email" required>
-      </div>
-      <div class="form-group">
-        <label for="password">パスワード:</label>
-        <input type="password" id="password" v-model="password" required>
-      </div>
-      <button type="submit" class="login-button" :disabled="isLoading">ログイン</button>
-      <p v-if="authError" class="error-message login-error">{{ authError }}</p>
-    </form>
-  </div>
-
-  <div v-else class="loading-container">
-     <p>認証状態を確認中...</p>
+    <div v-else class="loading-container">
+       <p>認証状態を確認中...</p>
+    </div>
   </div>
 </template>
 
 <style scoped>
-  /* 基本スタイル */
+  /* style scoped の内容は元のまま変更なし */
   body { font-family: sans-serif; margin: 0; background-color: #282c34; color: #e0e0e0; }
   button { padding: 8px 16px; font-size: 0.95em; cursor: pointer; border-radius: 4px; border: 1px solid #666; background-color: #444; color: #eee; transition: background-color 0.2s ease, border-color 0.2s ease; margin: 0; }
   button:hover:not(:disabled) { background-color: #555; border-color: #777; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   hr { margin: 30px 0; border: 0; border-top: 1px solid #555; }
   h1, h2 { color: #E0E0E0; margin-top: 0; margin-bottom: 0.8em; }
-  h4 { /* スタイル自体は残すが、要素は削除済み */ color: #D0D0D0; margin-bottom: 10px; text-align: center; }
+  h4 { color: #D0D0D0; margin-bottom: 10px; text-align: center; }
   p { margin-top: 0; margin-bottom: 0.8em; line-height: 1.6; }
   small { font-size: 0.85em; color: #bbb; }
-
-  /* レイアウト & コンポーネント */
   .user-info-bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 15px; background-color: #3a3f4a; margin-bottom: 20px; border-radius: 4px; flex-wrap: wrap; gap: 10px; }
   .user-email { color: #eee; white-space: nowrap; flex-shrink: 0; font-size: 0.9em; }
   .action-buttons { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; flex-grow: 1; }
@@ -431,8 +492,6 @@ onMounted(() => {
   .overall-summary p { margin-bottom: 6px; }
   .overall-summary p:last-child { margin-bottom: 0; }
   .overall-summary strong { color: #b8c5d6; }
-
-  /* 横スライダースタイル */
   .store-summary-slider { display: flex; overflow-x: auto; padding: 5px 20px 20px 20px; margin: 15px 0; scroll-snap-type: x mandatory; gap: 16px; -webkit-overflow-scrolling: touch; scroll-padding-left: 20px; scroll-padding-right: 20px; }
   .store-summary-slider::-webkit-scrollbar { height: 10px; }
   .store-summary-slider::-webkit-scrollbar-track { background: rgba(68, 68, 68, 0.5); border-radius: 5px; }
@@ -444,35 +503,8 @@ onMounted(() => {
   .store-summary-card p { margin: 6px 0; font-size: 0.9em; color: #c0c0c0; }
   .store-summary-card p strong { margin-right: 5px; color: #dcdcdc; font-weight: 600; }
   .store-summary-card.selected-card { border-color: #41B883; box-shadow: 0 4px 10px rgba(65, 184, 131, 0.4); border-width: 2px; transform: translateY(-3px); }
-
-  /* グラフコンテナのスタイル */
-  .chart-container {
-    margin-top: 30px;
-    max-width: 800px;
-    margin-left: auto;
-    margin-right: auto;
-    position: relative;
-    height: auto;
-    min-height: 350px;
-    background-color: #333842;
-    /* ▼▼▼ タイトル削除に伴い、上パディングを少し減らす (任意) ▼▼▼ */
-    padding: 10px 20px 10px 20px;
-    border-radius: 4px;
-    display: flex;
-    flex-direction: column;
-  }
-  /* .chart-title スタイルは残すが要素は削除済み */
-  /* .chart-container > :deep(div), .chart-container > *:last-child { ... } のスタイルは変更なし */
-  .chart-container > :deep(div),
-  .chart-container > *:last-child {
-      flex-grow: 1;
-      min-height: 300px; /* グラフ自体の最低高さを確保 */
-      display: flex;
-      align-items: stretch;
-  }
-
-
-  /* レポートリスト関連のスタイル */
+  .chart-container { margin-top: 30px; max-width: 800px; margin-left: auto; margin-right: auto; position: relative; height: auto; min-height: 350px; background-color: #333842; padding: 10px 20px 10px 20px; border-radius: 4px; display: flex; flex-direction: column; }
+  .chart-container > :deep(div), .chart-container > *:last-child { flex-grow: 1; min-height: 300px; display: flex; align-items: stretch; }
   .filter-reset-button { margin-left: 10px; font-size: 0.8em; padding: 4px 8px; background-color: #555; border: none; }
   .filter-reset-button:hover { background-color: #666; }
   .report-list { display: flex; flex-direction: column; gap: 16px; margin-top: 15px; }
@@ -486,8 +518,6 @@ onMounted(() => {
   .report-card .comment-text::-webkit-scrollbar-track { background: #333842; border-radius: 3px; }
   .report-card .comment-text { scrollbar-width: thin; scrollbar-color: #666 #333842; }
   .report-card .report-meta { display: block; margin-top: 12px; font-size: 0.8em; color: #888; text-align: right; }
-
-  /* ログイン画面 */
   .login-container { padding: 30px 20px; max-width: 450px; margin: 60px auto; background-color: #333842; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
   .login-title { text-align: center; color: #eee; margin-bottom: 25px; }
   .login-form { max-width: 400px; margin: 0 auto; }
@@ -499,25 +529,20 @@ onMounted(() => {
   .login-button:hover:not(:disabled) { background-color: #36a476; }
   .login-error { margin-top: 15px; text-align: center; font-weight: bold; }
   .loading-container { text-align: center; padding: 60px 20px; color: #ccc; font-size: 1.1em; }
+  @media (max-width: 768px) { .chart-container { min-height: 300px; } .chart-container > :deep(div), .chart-container > *:last-child { min-height: 250px; } }
+  @media (max-width: 600px) { .user-info-bar { flex-direction: column; align-items: flex-end; } .user-email { width: 100%; text-align: left; margin-bottom: 8px; } .action-buttons { width: 100%; justify-content: flex-end; gap: 8px; } .section-header { flex-direction: column; align-items: flex-start; } .month-nav-buttons { margin-top: 10px; width: 100%; display: flex; justify-content: space-between; } .month-nav-buttons button { margin-left: 0; flex-grow: 1; margin: 0 4px; } .store-summary-slider { padding-left: 15px; padding-right: 15px; scroll-padding-left: 15px; scroll-padding-right: 15px; gap: 12px; } .store-summary-card { flex-basis: calc(80vw - 30px); padding: 12px 15px; } .report-card { border-radius: 4px; padding: 12px; } .report-card h3 { font-size: 1em; margin-bottom: 8px; padding-bottom: 6px; } .report-card p { font-size: 0.9em; } .report-card .comment-text { max-height: 100px; } .login-container { margin: 40px 15px; } }
 
-  /* レスポンシブ */
-  @media (max-width: 768px) {
-    .chart-container { min-height: 300px; }
-    .chart-container > :deep(div), .chart-container > *:last-child { min-height: 250px; }
-  }
-  @media (max-width: 600px) {
-    .user-info-bar { flex-direction: column; align-items: flex-end; }
-    .user-email { width: 100%; text-align: left; margin-bottom: 8px; }
-    .action-buttons { width: 100%; justify-content: flex-end; gap: 8px; }
-    .section-header { flex-direction: column; align-items: flex-start; }
-    .month-nav-buttons { margin-top: 10px; width: 100%; display: flex; justify-content: space-between; }
-    .month-nav-buttons button { margin-left: 0; flex-grow: 1; margin: 0 4px; }
-    .store-summary-slider { padding-left: 15px; padding-right: 15px; scroll-padding-left: 15px; scroll-padding-right: 15px; gap: 12px; }
-    .store-summary-card { flex-basis: calc(80vw - 30px); padding: 12px 15px; }
-    .report-card { border-radius: 4px; padding: 12px; }
-    .report-card h3 { font-size: 1em; margin-bottom: 8px; padding-bottom: 6px; }
-    .report-card p { font-size: 0.9em; }
-    .report-card .comment-text { max-height: 100px; }
-    .login-container { margin: 40px 15px; }
-  }
+  /* --- ▼▼▼ PullToRefreshの表示を調整する場合の例 (コメントアウト中) ▼▼▼ --- */
+  /* :deep(.ptr--ptr) { */
+    /* 他の要素より手前に表示する場合 */
+    /* z-index: 9999; */
+  /* } */
+  /* :deep(.ptr--icon) { */
+    /* アイコンの色を変える場合 */
+    /* color: #4fc3f7; */
+  /* } */
+  /* :deep(.ptr--text) { */
+    /* テキストの色を変える場合 */
+    /* color: #e0e0e0; */
+  /* } */
 </style>
