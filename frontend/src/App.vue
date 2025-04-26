@@ -339,7 +339,7 @@ onMounted(() => {
               <p><strong>客数:</strong> {{ summary.visitor_count ?? 'N/A' }} 人 (新規: {{ summary.new_customer_count ?? 'N/A' }}, 染め: {{ summary.dye_customer_count ?? 'N/A' }})</p>
               <p><strong>値引計:</strong> {{ summary.discount_amount?.toLocaleString() ?? 'N/A' }} 円</p>
               <p><strong>月間目標:</strong> {{ summary.monthly_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
-              <p><strong>レポート数:</strong> {{ summary.reportCount ?? 'N/A' }} 件</p>
+              <p><strong>営業日数:</strong> {{ summary.reportCount ?? 'N/A' }} 日</p>
             </div>
           </div>
 
