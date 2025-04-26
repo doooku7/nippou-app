@@ -328,9 +328,9 @@ onMounted(() => {
               <h3>{{ storeName }}</h3>
               <p><strong>売上:</strong> {{ summary.sales_amount?.toLocaleString() ?? 'N/A' }} 円</p>
               <p><strong>日次目標計:</strong> {{ summary.daily_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
-              <p><strong>売上差額<small>(対 日次目標計)</small>:</strong>
+              <p><strong>売上差額<small>(対 目標計)</small>:</strong>
                 <span v-if="typeof summary.sales_amount === 'number' && typeof summary.daily_target_amount === 'number'">
-                  <span :style="{ color: (summary.sales_amount - summary.daily_target_amount) >= 0 ? '#4fc3f7' : 'red', fontWeight: 'bold' }">
+                  <span :style="{ color: (summary.sales_amount - summary.daily_target_amount) >= 0 ? '#4fc3f7' : '#f57876', fontWeight: 'bold' }">
                     {{ (summary.sales_amount - summary.daily_target_amount) >= 0 ? '+' : '' }}{{ (summary.sales_amount - summary.daily_target_amount).toLocaleString() }} 円
                   </span>
                   </span>
