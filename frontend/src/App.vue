@@ -7,7 +7,6 @@ import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from "firebas
 // --- Notification Subscription Logic ---
 const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
 const subscriptionStatus = ref('');
-// const isSubscribed = ref(false); // 必要ならコメント解除
 
 // Service Worker を登録する関数
 async function registerServiceWorker() {
@@ -151,12 +150,11 @@ async function fetchApiData(year = displayYear.value, month = displayMonth.value
 
     if (data) {
         reports.value = data.recentReports || [];
-        // storesSummaryData を更新
         storesSummaryData.value = data.storesSummary || {};
         summaryLastUpdatedData.value = data.summaryLastUpdated || null;
         displayYear.value = year;
         displayMonth.value = month;
-        selectedStore.value = null; // データ取得成功時は選択を解除
+        selectedStore.value = null;
     } else { throw new Error('API応答の形式が不正です。'); }
   } catch (error) {
     console.error('Error fetching data:', error);
@@ -211,22 +209,17 @@ const calculatedOverallSales = computed(() => {
   return 0;
 });
 
-// --- ▼▼▼ 追加: 売上順にソートされた店舗集計データの算出プロパティ ▼▼▼ ---
 const sortedStoresSummary = computed(() => {
   if (!storesSummaryData.value || typeof storesSummaryData.value !== 'object') {
     return [];
   }
-  // オブジェクトを [店名, 集計データ] の配列に変換
   return Object.entries(storesSummaryData.value)
-    // sales_amount (売上) で降順ソート (売上が数値でない場合は 0 として扱う)
     .sort(([, summaryA], [, summaryB]) => {
       const salesA = (summaryA && typeof summaryA.sales_amount === 'number') ? summaryA.sales_amount : 0;
       const salesB = (summaryB && typeof summaryB.sales_amount === 'number') ? summaryB.sales_amount : 0;
-      return salesB - salesA; // 降順 (多い順)
+      return salesB - salesA;
     });
 });
-// --- ▲▲▲ 追加 ▲▲▲ ---
-
 
 async function handleLogin() {
   authError.value = null;
@@ -276,7 +269,7 @@ onMounted(() => {
     } else {
       console.log('User logged out or not logged in.');
       reports.value = [];
-      storesSummaryData.value = {}; // storesSummaryData もクリア
+      storesSummaryData.value = {};
       summaryLastUpdatedData.value = null;
       fetchError.value = null;
       selectedStore.value = null;
@@ -327,7 +320,7 @@ onMounted(() => {
           </div>
 
           <div class="store-summary-slider">
-             <div v-for="([storeName, summary]) in sortedStoresSummary"
+            <div v-for="([storeName, summary]) in sortedStoresSummary"
                  :key="storeName"
                  class="store-summary-card"
                  @click="filterByStore(storeName)"
@@ -337,10 +330,10 @@ onMounted(() => {
               <p><strong>日次目標計:</strong> {{ summary.daily_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
               <p><strong>売上差額<small>(対 日次目標計)</small>:</strong>
                 <span v-if="typeof summary.sales_amount === 'number' && typeof summary.daily_target_amount === 'number'">
-                  <span :style="{ color: (summary.sales_amount - summary.daily_target_amount) >= 0 ? 'blue' : 'red', fontWeight: 'bold' }">
+                  <span :style="{ color: (summary.sales_amount - summary.daily_target_amount) >= 0 ? '#4fc3f7' : 'red', fontWeight: 'bold' }">
                     {{ (summary.sales_amount - summary.daily_target_amount) >= 0 ? '+' : '' }}{{ (summary.sales_amount - summary.daily_target_amount).toLocaleString() }} 円
                   </span>
-                </span>
+                  </span>
                 <span v-else>計算不可</span>
               </p>
               <p><strong>客数:</strong> {{ summary.visitor_count ?? 'N/A' }} 人 (新規: {{ summary.new_customer_count ?? 'N/A' }}, 染め: {{ summary.dye_customer_count ?? 'N/A' }})</p>
@@ -348,12 +341,12 @@ onMounted(() => {
               <p><strong>月間目標:</strong> {{ summary.monthly_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
               <p><strong>レポート数:</strong> {{ summary.reportCount ?? 'N/A' }} 件</p>
             </div>
-             </div>
+          </div>
+
           <div class="chart-container">
-            <h4 class="chart-title">店舗別 売上グラフ</h4>
             <StoreSalesChart :chart-data="storesSummaryData" />
-          </div>
-          </div>
+            </div>
+        </div>
         <p v-else class="no-data-message">表示できる月次集計データがありません。</p>
       </section>
 
@@ -407,19 +400,18 @@ onMounted(() => {
 </template>
 
 <style scoped>
-<style scoped>
-  /* 基本スタイル (変更なし) */
+  /* 基本スタイル */
   body { font-family: sans-serif; margin: 0; background-color: #282c34; color: #e0e0e0; }
   button { padding: 8px 16px; font-size: 0.95em; cursor: pointer; border-radius: 4px; border: 1px solid #666; background-color: #444; color: #eee; transition: background-color 0.2s ease, border-color 0.2s ease; margin: 0; }
   button:hover:not(:disabled) { background-color: #555; border-color: #777; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   hr { margin: 30px 0; border: 0; border-top: 1px solid #555; }
   h1, h2 { color: #E0E0E0; margin-top: 0; margin-bottom: 0.8em; }
-  h4 { color: #D0D0D0; margin-bottom: 10px; text-align: center; }
+  h4 { /* スタイル自体は残すが、要素は削除済み */ color: #D0D0D0; margin-bottom: 10px; text-align: center; }
   p { margin-top: 0; margin-bottom: 0.8em; line-height: 1.6; }
   small { font-size: 0.85em; color: #bbb; }
 
-  /* レイアウト & コンポーネント (変更なし) */
+  /* レイアウト & コンポーネント */
   .user-info-bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 15px; background-color: #3a3f4a; margin-bottom: 20px; border-radius: 4px; flex-wrap: wrap; gap: 10px; }
   .user-email { color: #eee; white-space: nowrap; flex-shrink: 0; font-size: 0.9em; }
   .action-buttons { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; flex-grow: 1; }
@@ -440,58 +432,47 @@ onMounted(() => {
   .overall-summary p:last-child { margin-bottom: 0; }
   .overall-summary strong { color: #b8c5d6; }
 
-  /* --- ▼▼▼ 横スライダースタイル変更 ▼▼▼ --- */
-  .store-summary-slider {
-    display: flex;
-    overflow-x: auto;
-    /* ↓↓↓ 左右にpaddingを追加して見切れを作る ↓↓↓ */
-    padding: 5px 20px 20px 20px; /* 上:5px, 左右:20px, 下:20px */
-    /* ↓↓↓ ネガティブマージンは削除し、通常のmarginに */
-    margin: 15px 0; /* 上下:15px, 左右:0 */
-
-    scroll-snap-type: x mandatory;
-    gap: 16px; /* カード間の隙間 */
-    -webkit-overflow-scrolling: touch; /* iOSでの慣性スクロール */
-
-    /* ↓↓↓ スナップ位置を左右のpaddingに合わせて調整 (任意) ↓↓↓ */
-    scroll-padding-left: 20px;
-    scroll-padding-right: 20px;
-
-    /* スクロールバーの見た目調整 (変更なし) */
-    &::-webkit-scrollbar { height: 10px; }
-    &::-webkit-scrollbar-track { background: rgba(68, 68, 68, 0.5); border-radius: 5px; }
-    &::-webkit-scrollbar-thumb { background-color: #777; border-radius: 5px; border: 2px solid rgba(68, 68, 68, 0.5); }
-    &::-webkit-scrollbar-thumb:hover { background-color: #999; }
-    scrollbar-width: thin;
-    scrollbar-color: #777 rgba(68, 68, 68, 0.5);
-  }
-
-  .store-summary-card {
-    /* ↓↓↓ カード幅を少し狭くする (例: 280px -> 260px) ↓↓↓ */
-    flex: 0 0 260px;
-
-    scroll-snap-align: start; /* または center など、好みに合わせて */
-    border: 1px solid #5a5a5a;
-    border-radius: 8px;
-    padding: 15px 20px; /* カード内のパディングは維持 */
-    background-color: #3c414d;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
-    cursor: pointer;
-  }
-  /* --- ▲▲▲ 横スライダースタイル変更 ▲▲▲ --- */
-
+  /* 横スライダースタイル */
+  .store-summary-slider { display: flex; overflow-x: auto; padding: 5px 20px 20px 20px; margin: 15px 0; scroll-snap-type: x mandatory; gap: 16px; -webkit-overflow-scrolling: touch; scroll-padding-left: 20px; scroll-padding-right: 20px; }
+  .store-summary-slider::-webkit-scrollbar { height: 10px; }
+  .store-summary-slider::-webkit-scrollbar-track { background: rgba(68, 68, 68, 0.5); border-radius: 5px; }
+  .store-summary-slider::-webkit-scrollbar-thumb { background-color: #777; border-radius: 5px; border: 2px solid rgba(68, 68, 68, 0.5); }
+  .store-summary-slider::-webkit-scrollbar-thumb:hover { background-color: #999; }
+  .store-summary-slider { scrollbar-width: thin; scrollbar-color: #777 rgba(68, 68, 68, 0.5); }
+  .store-summary-card { flex: 0 0 260px; scroll-snap-align: start; border: 1px solid #5a5a5a; border-radius: 8px; padding: 15px 20px; background-color: #3c414d; box-shadow: 0 2px 4px rgba(0,0,0,0.2); transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease; cursor: pointer; }
   .store-summary-card h3 { margin-top: 0; margin-bottom: 12px; font-size: 1.15em; color: #a6c0fe; border-bottom: 1px solid #555; padding-bottom: 8px; }
   .store-summary-card p { margin: 6px 0; font-size: 0.9em; color: #c0c0c0; }
   .store-summary-card p strong { margin-right: 5px; color: #dcdcdc; font-weight: 600; }
   .store-summary-card.selected-card { border-color: #41B883; box-shadow: 0 4px 10px rgba(65, 184, 131, 0.4); border-width: 2px; transform: translateY(-3px); }
 
-  /* グラフコンテナのスタイル (変更なし) */
-  .chart-container { margin-top: 30px; max-width: 800px; margin-left: auto; margin-right: auto; position: relative; height: auto; min-height: 350px; background-color: #333842; padding: 20px 20px 10px 20px; border-radius: 4px; display: flex; flex-direction: column; }
-  .chart-title { color: #d0d0d0; margin-bottom: 15px; font-size: 1.1em; text-align: center; flex-shrink: 0; }
-  .chart-container > :deep(div), .chart-container > *:last-child { flex-grow: 1; min-height: 300px; display: flex; align-items: stretch; }
+  /* グラフコンテナのスタイル */
+  .chart-container {
+    margin-top: 30px;
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
+    position: relative;
+    height: auto;
+    min-height: 350px;
+    background-color: #333842;
+    /* ▼▼▼ タイトル削除に伴い、上パディングを少し減らす (任意) ▼▼▼ */
+    padding: 10px 20px 10px 20px;
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+  }
+  /* .chart-title スタイルは残すが要素は削除済み */
+  /* .chart-container > :deep(div), .chart-container > *:last-child { ... } のスタイルは変更なし */
+  .chart-container > :deep(div),
+  .chart-container > *:last-child {
+      flex-grow: 1;
+      min-height: 300px; /* グラフ自体の最低高さを確保 */
+      display: flex;
+      align-items: stretch;
+  }
 
-  /* レポートリスト関連のスタイル (変更なし) */
+
+  /* レポートリスト関連のスタイル */
   .filter-reset-button { margin-left: 10px; font-size: 0.8em; padding: 4px 8px; background-color: #555; border: none; }
   .filter-reset-button:hover { background-color: #666; }
   .report-list { display: flex; flex-direction: column; gap: 16px; margin-top: 15px; }
@@ -506,7 +487,7 @@ onMounted(() => {
   .report-card .comment-text { scrollbar-width: thin; scrollbar-color: #666 #333842; }
   .report-card .report-meta { display: block; margin-top: 12px; font-size: 0.8em; color: #888; text-align: right; }
 
-  /* ログイン画面 (変更なし) */
+  /* ログイン画面 */
   .login-container { padding: 30px 20px; max-width: 450px; margin: 60px auto; background-color: #333842; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
   .login-title { text-align: center; color: #eee; margin-bottom: 25px; }
   .login-form { max-width: 400px; margin: 0 auto; }
@@ -519,39 +500,20 @@ onMounted(() => {
   .login-error { margin-top: 15px; text-align: center; font-weight: bold; }
   .loading-container { text-align: center; padding: 60px 20px; color: #ccc; font-size: 1.1em; }
 
-  /* レスポンシブ (一部変更あり) */
+  /* レスポンシブ */
   @media (max-width: 768px) {
-    /* スマホでのグラフコンテナ最低高さ (変更なし) */
     .chart-container { min-height: 300px; }
     .chart-container > :deep(div), .chart-container > *:last-child { min-height: 250px; }
   }
   @media (max-width: 600px) {
-    /* その他のスマホ向けスタイル (変更なし) */
     .user-info-bar { flex-direction: column; align-items: flex-end; }
     .user-email { width: 100%; text-align: left; margin-bottom: 8px; }
     .action-buttons { width: 100%; justify-content: flex-end; gap: 8px; }
     .section-header { flex-direction: column; align-items: flex-start; }
     .month-nav-buttons { margin-top: 10px; width: 100%; display: flex; justify-content: space-between; }
     .month-nav-buttons button { margin-left: 0; flex-grow: 1; margin: 0 4px; }
-
-    /* --- ▼▼▼ スマホでのスライダーとカード幅調整 ▼▼▼ --- */
-    .store-summary-slider {
-      /* ↓↓↓ スマホでは左右paddingを少し減らす (任意) ↓↓↓ */
-      padding-left: 15px;
-      padding-right: 15px;
-      scroll-padding-left: 15px;
-      scroll-padding-right: 15px;
-      gap: 12px; /* スマホではカード間隔も少し詰める */
-    }
-    .store-summary-card {
-      /* ↓↓↓ スマホでのカード幅調整 (左右が見えるように) ↓↓↓ */
-      flex-basis: calc(80vw - 30px); /* 例: 画面幅80% - 左右padding分 */
-      /* または固定値 */
-      /* flex-basis: 240px; */
-      padding: 12px 15px; /* スマホではカード内パディングも少し減らす */
-    }
-    /* --- ▲▲▲ スマホでのスライダーとカード幅調整 ▲▲▲ --- */
-
+    .store-summary-slider { padding-left: 15px; padding-right: 15px; scroll-padding-left: 15px; scroll-padding-right: 15px; gap: 12px; }
+    .store-summary-card { flex-basis: calc(80vw - 30px); padding: 12px 15px; }
     .report-card { border-radius: 4px; padding: 12px; }
     .report-card h3 { font-size: 1em; margin-bottom: 8px; padding-bottom: 6px; }
     .report-card p { font-size: 0.9em; }
