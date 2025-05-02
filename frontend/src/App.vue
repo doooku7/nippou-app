@@ -7,7 +7,7 @@ import StoreSalesChart from './components/StoreSalesChart.vue'; // グラフコ�
 import { auth } from './firebaseConfig'; // Firebase設定ファイルのパスを確認
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from "firebase/auth";
 
-// --- Notification Subscription Logic (元のまま) ---
+// --- Notification Subscription Logic (変更なし) ---
 const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
 const subscriptionStatus = ref('');
 
@@ -72,18 +72,28 @@ async function subscribeToNotifications() {
     console.log('User is subscribed:', subscription);
 
     console.log('Sending subscription to server...');
+    // ★ getIdToken を追加して認証情報を付与
+    const idToken = currentUser.value ? await currentUser.value.getIdToken() : null;
+    if (!idToken) {
+      throw new Error('認証トークンが取得できませんでした。再度ログインしてください。');
+    }
     const response = await fetch('/api/v1/subscribe', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        // 'Authorization': `Bearer ${await currentUser.value?.getIdToken()}`
+        'Authorization': `Bearer ${idToken}` // ★ トークンを追加
       },
       body: JSON.stringify({ subscription: subscription }),
     });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ error: '不明なサーバーエラー' }));
-      throw new Error(`サーバーエラー: ${response.status} ${response.statusText} - ${errorData.error}`);
+      // 401/403 エラーの場合はログアウトを促すメッセージを追加
+      if (response.status === 401 || response.status === 403) {
+          throw new Error(`サーバーエラー: ${response.status} ${response.statusText} - ${errorData.error} (アクセス権限がない可能性があります。再度ログインしてください)`);
+      } else {
+          throw new Error(`サーバーエラー: ${response.status} ${response.statusText} - ${errorData.error}`);
+      }
     }
     const result = await response.json();
     console.log('Server response:', result);
@@ -91,21 +101,29 @@ async function subscribeToNotifications() {
 
   } catch (error) {
     console.error('Error during subscription process:', error);
+    // 既存のエラーメッセージ表示ロジックは維持
     if (!subscriptionStatus.value.startsWith('エラー') && !subscriptionStatus.value.startsWith('購読中にエラー')) {
         subscriptionStatus.value = `エラーが発生しました: ${error.message}`;
     } else if (!subscriptionStatus.value.includes(error.message)) {
+        subscriptionStatus.value += ` ${error.message}`; // メッセージを追加する場合
     }
-    if (error.name === 'AbortError' || error.message.includes('subscribe')) {
+    // subscribe 中のエラーに特化したメッセージ
+    if (error.name === 'AbortError' || (error.message && error.message.toLowerCase().includes('subscribe'))) {
         subscriptionStatus.value = `購読中にエラーが発生しました: ${error.message}`;
+    }
+    // 認証エラーの場合のメッセージ
+    if (error.message.includes('認証トークン')) {
+        subscriptionStatus.value = `エラー: ${error.message}`;
     }
   }
 }
+
 
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - base64String.length % 4) % 4); const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/'); const rawData = window.atob(base64); const outputArray = new Uint8Array(rawData.length); for (let i = 0; i < rawData.length; ++i) { outputArray[i] = rawData.charCodeAt(i); } return outputArray;
 }
 
-// --- Report Display Logic (元のまま) ---
+// --- Report Display Logic (変更なし) ---
 const reports = ref([]);
 const storesSummaryData = ref({});
 const summaryLastUpdatedData = ref(null);
@@ -128,7 +146,7 @@ async function fetchApiData(year = displayYear.value, month = displayMonth.value
   isLoading.value = true;
   fetchError.value = null;
 
-  console.log(`Workspaceing data for ${year}-${month}...`); // Typo修正
+  console.log(`Workspaceing data for ${year}-${month}...`); // Typo修正: Fetching
   try {
     if (!currentUser.value) { throw new Error('ユーザーがログインしていません。'); }
     const idToken = await currentUser.value.getIdToken(); // ★ トークン取得
@@ -141,7 +159,7 @@ async function fetchApiData(year = displayYear.value, month = displayMonth.value
       try { const errorData = await response.json(); errorMsg = errorData.error || errorMsg; } catch(e) { /* ignore */ }
       // ★ ログアウト処理を分離。エラー処理に await は不要
       if (response.status === 401 || response.status === 403) {
-          errorMsg = `アクセス権エラー (${response.status}): ${errorMsg}`;
+          errorMsg = `アクセス権エラー (${response.status}): ${errorMsg} 再度ログインしてください。`;
           // 401/403の場合はログアウト処理を呼ぶ
           handleLogout(); // await は不要
       }
@@ -178,16 +196,24 @@ const sortedReports = computed(() => {
   if (!reports.value || reports.value.length === 0) { return []; }
   return [...reports.value].sort((a, b) => {
     try {
-      const dateA = new Date(String(a.report_date).replace(/\//g, '-'));
-      const dateB = new Date(String(b.report_date).replace(/\//g, '-'));
-      if (isNaN(dateA.getTime()) || isNaN(dateB.getTime())) return 0;
-      return dateB - dateA;
+      // 日付文字列のフォーマットを考慮 (YYYY/MM/DD or YYYY-MM-DD)
+      const dateAStr = String(a.report_date).replace(/\//g, '-');
+      const dateBStr = String(b.report_date).replace(/\//g, '-');
+      const dateA = new Date(dateAStr);
+      const dateB = new Date(dateBStr);
+      // 無効な日付チェック
+      if (isNaN(dateA.getTime()) || isNaN(dateB.getTime())) {
+          console.warn(`Invalid date format for sorting: A='${a.report_date}', B='${b.report_date}'`);
+          return 0; // 無効な日付の場合は順序を変えない
+      }
+      return dateB - dateA; // 新しい日付が先頭
     } catch (e) {
-      console.error("Error parsing date for sorting:", e);
-      return 0;
+      console.error("Error parsing date for sorting:", e, a.report_date, b.report_date);
+      return 0; // エラー時も順序を変えない
     }
   });
 });
+
 
 function filterByStore(storeName) {
   selectedStore.value = (selectedStore.value === storeName) ? null : storeName;
@@ -198,24 +224,30 @@ const filteredAndSortedReports = computed(() => {
   return sortedReports.value.filter(report => report.store_name === selectedStore.value);
 });
 
+// 計算プロパティ: null や undefined を考慮
 const calculatedOverallTarget = computed(() => {
-  if (storesSummaryData.value && typeof storesSummaryData.value === 'object' && Object.keys(storesSummaryData.value).length > 0) {
-    return Object.values(storesSummaryData.value).reduce((total, storeSummary) => {
-      const target = (storeSummary && typeof storeSummary.monthly_target_amount === 'number') ? storeSummary.monthly_target_amount : 0;
-      return total + target;
-    }, 0);
-  }
-  return 0;
+  if (!storesSummaryData.value || typeof storesSummaryData.value !== 'object') return 0;
+  return Object.values(storesSummaryData.value).reduce((total, storeSummary) => {
+    const target = storeSummary?.monthly_target_amount ?? 0; // Optional chaining と nullish coalescing
+    return total + (typeof target === 'number' ? target : 0); // 数値か確認
+  }, 0);
 });
 
 const calculatedOverallSales = computed(() => {
-  if (storesSummaryData.value && typeof storesSummaryData.value === 'object' && Object.keys(storesSummaryData.value).length > 0) {
-    return Object.values(storesSummaryData.value).reduce((total, storeSummary) => {
-      const sales = (storeSummary && typeof storeSummary.sales_amount === 'number') ? storeSummary.sales_amount : 0;
-      return total + sales;
-    }, 0);
-  }
-  return 0;
+  if (!storesSummaryData.value || typeof storesSummaryData.value !== 'object') return 0;
+  return Object.values(storesSummaryData.value).reduce((total, storeSummary) => {
+    const sales = storeSummary?.sales_amount ?? 0; // Optional chaining と nullish coalescing
+    return total + (typeof sales === 'number' ? sales : 0); // 数値か確認
+  }, 0);
+});
+
+const calculatedOverallAchievementRate = computed(() => {
+    const target = calculatedOverallTarget.value;
+    const sales = calculatedOverallSales.value;
+    if (target > 0 && typeof sales === 'number') {
+        return ((sales / target) * 100).toFixed(1);
+    }
+    return 'N/A'; // 目標が0または売上が数値でない場合
 });
 
 const sortedStoresSummary = computed(() => {
@@ -224,19 +256,40 @@ const sortedStoresSummary = computed(() => {
   }
   return Object.entries(storesSummaryData.value)
     .sort(([, summaryA], [, summaryB]) => {
-      const salesA = (summaryA && typeof summaryA.sales_amount === 'number') ? summaryA.sales_amount : 0;
-      const salesB = (summaryB && typeof summaryB.sales_amount === 'number') ? summaryB.sales_amount : 0;
-      return salesB - salesA;
+      // null/undefined チェックと数値型チェックを強化
+      const salesA = summaryA?.sales_amount ?? -Infinity; // 売上ない場合は末尾へ
+      const salesB = summaryB?.sales_amount ?? -Infinity;
+      const numSalesA = typeof salesA === 'number' ? salesA : -Infinity;
+      const numSalesB = typeof salesB === 'number' ? salesB : -Infinity;
+      return numSalesB - numSalesA; // 売上降順
     });
 });
 
 async function handleLogin() {
   authError.value = null;
   try {
-    const userCredential = await signInWithEmailAndPassword(auth, email.value, password.value);
-    password.value = '';
+    await signInWithEmailAndPassword(auth, email.value, password.value);
+    password.value = ''; // ログイン成功後にパスワードをクリア
   } catch (error) {
-    authError.value = `ログイン失敗。(${error.code || error.message})`;
+    console.error("Login failed:", error); // エラーログ出力
+    // エラーコードに基づいてより具体的なメッセージを表示
+    switch (error.code) {
+        case 'auth/invalid-email':
+            authError.value = 'メールアドレスの形式が正しくありません。';
+            break;
+        case 'auth/user-not-found':
+        case 'auth/wrong-password': // Firebase v9以降では統合された可能性あり、要確認
+             authError.value = 'メールアドレスまたはパスワードが間違っています。';
+             break;
+        case 'auth/invalid-credential': // v9以降の一般的な認証エラー
+             authError.value = 'メールアドレスまたはパスワードが間違っています。';
+             break;
+        case 'auth/too-many-requests':
+             authError.value = '試行回数が多すぎます。しばらくしてから再度お試しください。';
+             break;
+        default:
+            authError.value = `ログイン失敗。(${error.message})`; // 不明なエラー
+    }
   }
 }
 
@@ -245,8 +298,11 @@ async function handleLogout() {
   try {
     await signOut(auth);
     // ログアウト後のデータクリアは onAuthStateChanged で行う
+    console.log("User logged out successfully.");
   } catch (error) {
     console.error("Logout failed:", error);
+     // ログアウト失敗時のユーザー向けメッセージ（必要であれば）
+     // authError.value = "ログアウト中にエラーが発生しました。";
   }
 }
 
@@ -260,6 +316,7 @@ function fetchNextMonth() {
   let nextYear = displayYear.value; let nextMonth = displayMonth.value + 1;
   if (nextMonth > 12) { nextMonth = 1; nextYear++; }
   const currentYear = now.getFullYear(); const currentMonth = now.getMonth() + 1;
+  // 未来の月は取得しない
   if (nextYear > currentYear || (nextYear === currentYear && nextMonth > currentMonth)) { return; }
   fetchApiData(nextYear, nextMonth);
 }
@@ -274,12 +331,19 @@ const isNextMonthDisabled = computed(() => {
 let ptrInstance = null;
 
 function initializePullToRefresh() {
-  if (ptrInstance) return;
+  if (ptrInstance) return; // 既に初期化されていれば何もしない
+  // PullToRefreshがロードされているか確認
+  if (typeof PullToRefresh === 'undefined' || !PullToRefresh.init) {
+      console.error('PullToRefresh library is not loaded correctly.');
+      return;
+  }
   try {
     ptrInstance = PullToRefresh.init({
-      mainElement: 'body',
-      triggerElement: 'body',
-      shouldPullToRefresh: () => !isLoading.value,
+      mainElement: '#app main', // スクロール要素をより具体的に指定 (必要に応じて調整)
+      triggerElement: '#app main', // トリガー要素も同様
+      // mainElement: 'body', // 元の指定
+      // triggerElement: 'body', // 元の指定
+      shouldPullToRefresh: () => !isLoading.value && currentUser.value, // ログイン中かつローディング中でない場合のみ有効
       onRefresh: async () => {
         console.log('PullToRefresh: Refresh triggered!');
         await fetchApiData(displayYear.value, displayMonth.value);
@@ -288,37 +352,58 @@ function initializePullToRefresh() {
       instructionsPullToRefresh: '下にスワイプして更新',
       instructionsReleaseToRefresh: '指を離して更新',
       instructionsRefreshing: '更新中...',
-      // haptics: true,
+      resistanceFunction: t => Math.min(1, t / 2.5), // 引っ張りの抵抗感 (デフォルト)
+      refreshTimeout: 5000, // タイムアウト (ms)
+      // haptics: true, // 触覚フィードバック (対応デバイスのみ)
+      classPrefix: 'ptr--', // CSSクラス接頭辞 (デフォルト)
+      distThreshold: 60, // 引き下げ距離の閾値 (px, デフォルト)
+      distMax: 80, // 最大引き下げ距離 (px, デフォルト)
+      distReload: 50, // 更新開始後の戻り距離 (px, デフォルト)
     });
     console.log('PullToRefresh initialized.');
   } catch (error) {
     console.error('PullToRefresh initialization failed:', error);
-    ptrInstance = null;
+    ptrInstance = null; // 失敗したらnullに戻す
   }
 }
 
 function destroyPullToRefresh() {
-  if (ptrInstance) {
-    PullToRefresh.destroyAll();
-    ptrInstance = null;
-    console.log('PullToRefresh instance destroyed.');
+  // PullToRefreshがロードされ、destroyAllメソッドが存在するか確認
+  if (ptrInstance && typeof PullToRefresh !== 'undefined' && PullToRefresh.destroyAll) {
+    try {
+        PullToRefresh.destroyAll();
+        ptrInstance = null;
+        console.log('PullToRefresh instance destroyed.');
+    } catch(error) {
+        console.error('Error destroying PullToRefresh:', error);
+        ptrInstance = null; // エラーが発生してもインスタンス参照はクリア
+    }
+  } else if (ptrInstance) {
+      // destroyAll がなくてもインスタンス参照だけクリア
+      console.warn('PullToRefresh.destroyAll is not available, clearing instance reference only.');
+      ptrInstance = null;
   }
 }
 // --- PullToRefresh 関連 ここまで ---
 
 
 onMounted(() => {
-  registerServiceWorker(); // Service Worker 登録
-  onAuthStateChanged(auth, (user) => {
+  registerServiceWorker(); // Service Worker 登録は初回のみ
+  const unsubscribe = onAuthStateChanged(auth, (user) => { // unsubscribe を取得
     currentUser.value = user;
     if (user) {
       console.log('User logged in:', user.email);
       fetchApiData(); // ログイン時にデータ取得
-      initializePullToRefresh(); // ★ ログインしたらPullToRefreshを初期化
+      // DOMが完全にレンダリングされた後にPullToRefreshを初期化
+      // nextTick(() => { // nextTick を使う場合 (import { nextTick } from 'vue'; が必要)
+      //    initializePullToRefresh();
+      // });
+      // または少し遅延させる
+      setTimeout(initializePullToRefresh, 100); // 100ms 遅延させる (適切な時間は調整)
     } else {
       console.log('User logged out or not logged in.');
       destroyPullToRefresh(); // ★ ログアウトしたらPullToRefreshを破棄
-      // データクリア処理 (既存)
+      // データクリア処理 (変更なし)
       reports.value = [];
       storesSummaryData.value = {};
       summaryLastUpdatedData.value = null;
@@ -331,12 +416,19 @@ onMounted(() => {
       isLoading.value = false; // ログアウト時はローディング解除
     }
   });
+
+  // コンポーネント破棄時にAuthStateChangedのリスナーも解除
+  onUnmounted(() => {
+    unsubscribe(); // リスナーを解除
+    destroyPullToRefresh(); // PullToRefreshも破棄
+    console.log("Auth state listener and PullToRefresh destroyed on unmount.");
+  });
 });
 
-// コンポーネント破棄時にも念のため破棄
-onUnmounted(() => {
-  destroyPullToRefresh();
-});
+// ★ onUnmounted は onMounted 内で定義せず、直接 setup スコープで定義
+// onUnmounted(() => {
+//   destroyPullToRefresh(); // 既に onMounted 内の onUnmounted で処理されている
+// });
 
 </script>
 
@@ -346,8 +438,8 @@ onUnmounted(() => {
       <header class="user-info-bar">
         <span class="user-email">ログイン中: {{ currentUser.email }}</span>
         <div class="action-buttons">
-          <button @click="fetchApiData()" :disabled="isLoading" class="action-button">{{ isLoading ? '読み込み中...' : '更新' }}</button>
-          <button @click="subscribeToNotifications" class="action-button" :disabled="isLoading">通知購読</button>
+          <button @click="fetchApiData(displayYear, displayMonth)" :disabled="isLoading" class="action-button">{{ isLoading ? '読込中...' : '手動更新' }}</button>
+          <button @click="subscribeToNotifications" class="action-button" :disabled="isLoading || !currentUser /* 購読ボタンもログイン状態を考慮 */">通知購読</button>
           <button @click="handleLogout" class="action-button logout-button">ログアウト</button>
         </div>
       </header>
@@ -366,13 +458,15 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div v-if="isLoading && currentUser && !fetchError" class="loading-message">集計データを読み込み中...</div>
-          <div v-else-if="fetchError" class="error-message">{{ fetchError }}</div> <div v-else-if="Object.keys(storesSummaryData).length > 0">
+          <div v-if="isLoading && !fetchError" class="loading-message">集計データを読み込み中...</div>
+          <div v-else-if="fetchError" class="error-message">{{ fetchError }}</div>
+          <div v-else-if="Object.keys(storesSummaryData).length > 0">
             <div class="overall-summary">
               <p><strong>全体の月間目標 (合計):</strong> {{ calculatedOverallTarget?.toLocaleString() ?? 'N/A' }} 円</p>
               <p><strong>全体の月間売上 (合計):</strong> {{ calculatedOverallSales?.toLocaleString() ?? 'N/A' }} 円</p>
-              <p v-if="calculatedOverallTarget > 0">
-                <strong>全体の達成率:</strong> {{ ((calculatedOverallSales / calculatedOverallTarget) * 100).toFixed(1) }} %
+              <p><strong>全体の達成率:</strong>
+                {{ calculatedOverallAchievementRate }}
+                <span v-if="calculatedOverallAchievementRate !== 'N/A'"> %</span>
               </p>
               <p v-if="summaryLastUpdatedData"><small>最終集計日時: {{ formatDateTime(summaryLastUpdatedData) }}</small></p>
             </div>
@@ -384,26 +478,26 @@ onUnmounted(() => {
                    @click="filterByStore(storeName)"
                    :class="{ 'selected-card': selectedStore === storeName }">
                 <h3>{{ storeName }}</h3>
-                <p><strong>売上:</strong> {{ summary.sales_amount?.toLocaleString() ?? 'N/A' }} 円</p>
-                <p><strong>日次目標計:</strong> {{ summary.daily_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
+                <p><strong>売上:</strong> {{ summary?.sales_amount?.toLocaleString() ?? 'N/A' }} 円</p>
+                <p><strong>日次目標計:</strong> {{ summary?.daily_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
                 <p><strong>売上差額<small>(対 日次目標計)</small>:</strong>
-                  <span v-if="typeof summary.sales_amount === 'number' && typeof summary.daily_target_amount === 'number'">
+                  <span v-if="typeof summary?.sales_amount === 'number' && typeof summary?.daily_target_amount === 'number'">
                     <span :style="{ color: (summary.sales_amount - summary.daily_target_amount) >= 0 ? '#4fc3f7' : '#ef5350', fontWeight: 'bold' }">
                       {{ (summary.sales_amount - summary.daily_target_amount) >= 0 ? '+' : '' }}{{ (summary.sales_amount - summary.daily_target_amount).toLocaleString() }} 円
                     </span>
-                    </span>
+                  </span>
                   <span v-else>計算不可</span>
                 </p>
-                <p><strong>客数:</strong> {{ summary.visitor_count ?? 'N/A' }} 人 (新規: {{ summary.new_customer_count ?? 'N/A' }}, 染め: {{ summary.dye_customer_count ?? 'N/A' }})</p>
-                <p><strong>値引計:</strong> {{ summary.discount_amount?.toLocaleString() ?? 'N/A' }} 円</p>
-                <p><strong>月間目標:</strong> {{ summary.monthly_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
-                <p><strong>レポート数:</strong> {{ summary.reportCount ?? 'N/A' }} 件</p>
+                <p><strong>客数:</strong> {{ summary?.visitor_count ?? 'N/A' }} 人 (新規: {{ summary?.new_customer_count ?? 'N/A' }}, 染め: {{ summary?.dye_customer_count ?? 'N/A' }})</p>
+                <p><strong>値引計:</strong> {{ summary?.discount_amount?.toLocaleString() ?? 'N/A' }} 円</p>
+                <p><strong>月間目標:</strong> {{ summary?.monthly_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
+                <p><strong>レポート数:</strong> {{ summary?.reportCount ?? 'N/A' }} 件</p>
               </div>
             </div>
 
             <div class="chart-container">
               <StoreSalesChart :chart-data="storesSummaryData" />
-              </div>
+            </div>
           </div>
           <p v-else class="no-data-message">表示できる月次集計データがありません。</p>
         </section>
@@ -416,8 +510,9 @@ onUnmounted(() => {
              <button v-if="selectedStore" @click="filterByStore(null)" class="filter-reset-button">({{ selectedStore }} のフィルター解除)</button>
           </div>
            <div v-if="isLoading && !fetchError" class="loading-message">レポートリストを読み込んでいます...</div>
-          <div v-else-if="fetchError && !isLoading" class="error-message">{{ fetchError }}</div> <div v-else-if="filteredAndSortedReports.length > 0" class="report-list">
-            <div v-for="report in filteredAndSortedReports" :key="report.id" class="report-card">
+          <div v-else-if="fetchError" class="error-message">{{ fetchError }}</div>
+          <div v-else-if="filteredAndSortedReports.length > 0" class="report-list">
+            <div v-for="report in filteredAndSortedReports" :key="report.id /* または report.report_date + report.store_name など一意なキー */" class="report-card">
                <h3>{{ report.report_date }} - {{ report.store_name }}</h3>
                <p><strong>売上:</strong> {{ report.sales_amount?.toLocaleString() ?? 'N/A' }} 円</p>
                <p><strong>日次目標:</strong> {{ report.daily_target_amount?.toLocaleString() ?? 'N/A' }} 円</p>
@@ -432,8 +527,7 @@ onUnmounted(() => {
             <span v-if="selectedStore" style="font-weight: bold;">{{ selectedStore }} の</span>表示できる最近の日報データがありません。
           </p>
           </section>
-      </main>
-    </div>
+      </main> </div>
 
     <div v-else-if="!isLoading" class="login-container">
       <h2 class="login-title">ログイン</h2>
@@ -458,75 +552,127 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-    /* --- ▼▼▼ #app の padding を打ち消す CSS を追加 ▼▼▼ --- */
+    /* グローバルな#appのpaddingをリセット */
     :global(#app) {
       padding-left: 0 !important;
       padding-right: 0 !important;
       box-sizing: border-box;
+      /* PullToRefreshのためにbody/htmlのheightも必要になる場合がある */
     }
-    /* --- ▲▲▲ CSS を追加 ▲▲▲ --- */
+    :global(body), :global(html) {
+      /* height: 100%; */ /* 必要に応じて */
+      /* overflow: hidden; */ /* PullToRefreshがbodyを対象とする場合、二重スクロールバーを防ぐ */
+    }
 
-    /* 基本スタイル (元のものをそのままコピー) */
+    /* 基本スタイル (元のものを継承しつつ微調整) */
+    #app {
+        padding: 0 15px; /* 左右に共通のパディングを設定 */
+        box-sizing: border-box;
+        max-width: 1200px; /* 全体の最大幅（任意） */
+        margin: 0 auto; /* 中央寄せ */
+    }
+    main {
+        /* PullToRefreshのmainElement/triggerElementとして指定した場合、
+           適切なスクロール挙動のためにスタイルが必要になることがある */
+        /* overflow-y: auto; */ /* main要素内でスクロールさせる場合 */
+        /* height: calc(100vh - YOUR_HEADER_HEIGHT); */ /* ヘッダー分を引いた高さ */
+    }
+
     body { font-family: sans-serif; margin: 0; background-color: #282c34; color: #e0e0e0; }
-    button { padding: 8px 16px; font-size: 0.95em; cursor: pointer; border-radius: 4px; border: 1px solid #666; background-color: #444; color: #eee; transition: background-color 0.2s ease, border-color 0.2s ease; margin: 0; }
+    button { padding: 8px 16px; font-size: 0.95em; cursor: pointer; border-radius: 4px; border: 1px solid #666; background-color: #444; color: #eee; transition: background-color 0.2s ease, border-color 0.2s ease; margin: 0; vertical-align: middle; /* ボタンの縦揃え */ }
     button:hover:not(:disabled) { background-color: #555; border-color: #777; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     hr { margin: 30px 0; border: 0; border-top: 1px solid #555; }
     h1, h2 { color: #E0E0E0; margin-top: 0; margin-bottom: 0.8em; }
+    h3 { margin-top: 0; margin-bottom: 0.7em; color: #a6c0fe; } /* h3 の共通スタイル */
     h4 { color: #D0D0D0; margin-bottom: 10px; text-align: center; }
     p { margin-top: 0; margin-bottom: 0.8em; line-height: 1.6; }
     small { font-size: 0.85em; color: #bbb; }
-    .user-info-bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 15px; background-color: #3a3f4a; margin-bottom: 20px; border-radius: 4px; flex-wrap: wrap; gap: 10px; }
+
+    /* ヘッダーバー */
+    .user-info-bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; /* 左右パディングは #app で管理 */ background-color: #3a3f4a; margin-bottom: 20px; border-radius: 4px; flex-wrap: wrap; gap: 10px; position: sticky; /* ヘッダーを固定する場合 */ top: 0; /* 固定する場合 */ z-index: 10; /* 固定する場合 */ }
     .user-email { color: #eee; white-space: nowrap; flex-shrink: 0; font-size: 0.9em; }
     .action-buttons { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; flex-grow: 1; }
     .action-button { font-size: 0.9em; padding: 6px 12px; }
     .logout-button { background-color: #d9534f; border-color: #d43f3a; color: white; }
     .logout-button:hover:not(:disabled) { background-color: #c9302c; border-color: #ac2925; }
-    .subscription-status { text-align: right; margin-top: -15px; margin-bottom: 15px; font-size: 0.85em; color: #aaa; }
+    .subscription-status { text-align: right; margin-top: -15px; margin-bottom: 15px; font-size: 0.85em; color: #aaa; padding-right: 5px; /* 右端に少し余白 */ }
+
+    /* メインコンテンツ */
     .main-title { text-align: center; margin-bottom: 15px; }
     .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px; }
-    .section-header h2 { margin-bottom: 0; }
+    .section-header h2 { margin-bottom: 0; font-size: 1.4em; /* 少し大きく */ }
     .month-nav-buttons button { margin-left: 8px; padding: 6px 12px; font-size: 0.9em; }
     .loading-message, .no-data-message, .error-message { padding: 15px; margin-top: 15px; border-radius: 4px; text-align: center; }
     .loading-message { color: #ccc; }
     .no-data-message { color: #aaa; background-color: rgba(85, 85, 85, 0.2); }
-    /* エラーメッセージのスタイルを少し目立たせる (任意) */
-    .error-message {
-        color: #ffcaca; /* 少し明るい赤 */
-        background-color: rgba(217, 83, 79, 0.2); /* 背景を少し濃く */
-        border: 1px solid rgba(217, 83, 79, 0.4);
-        font-weight: bold;
-    }
+    .error-message { color: #ffcaca; background-color: rgba(217, 83, 79, 0.2); border: 1px solid rgba(217, 83, 79, 0.4); font-weight: bold; }
+
+    /* 全体サマリー */
     .overall-summary { margin-bottom: 20px; padding: 15px; background-color: #333842; border-radius: 4px; }
     .overall-summary p { margin-bottom: 6px; }
     .overall-summary p:last-child { margin-bottom: 0; }
     .overall-summary strong { color: #b8c5d6; }
-    .store-summary-slider { display: flex; overflow-x: auto; padding: 5px 20px 20px 20px; margin: 15px 0; scroll-snap-type: x mandatory; gap: 16px; -webkit-overflow-scrolling: touch; scroll-padding-left: 20px; scroll-padding-right: 20px; }
+
+    /* 店舗別サマリースライダー */
+    .store-summary-slider { display: flex; overflow-x: auto; padding: 5px 5px 20px 5px; /* 左右パディング少し減らす */ margin: 15px -5px; /* ネガティブマージンで左右に広げる */ scroll-snap-type: x mandatory; gap: 16px; -webkit-overflow-scrolling: touch; scroll-padding: 0 5px; /* スナップ位置調整 */ }
     .store-summary-slider::-webkit-scrollbar { height: 10px; }
     .store-summary-slider::-webkit-scrollbar-track { background: rgba(68, 68, 68, 0.5); border-radius: 5px; }
     .store-summary-slider::-webkit-scrollbar-thumb { background-color: #777; border-radius: 5px; border: 2px solid rgba(68, 68, 68, 0.5); }
     .store-summary-slider::-webkit-scrollbar-thumb:hover { background-color: #999; }
     .store-summary-slider { scrollbar-width: thin; scrollbar-color: #777 rgba(68, 68, 68, 0.5); }
-    .store-summary-card { flex: 0 0 260px; scroll-snap-align: start; border: 1px solid #5a5a5a; border-radius: 8px; padding: 15px 20px; background-color: #3c414d; box-shadow: 0 2px 4px rgba(0,0,0,0.2); transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease; cursor: pointer; }
-    .store-summary-card h3 { margin-top: 0; margin-bottom: 12px; font-size: 1.15em; color: #a6c0fe; border-bottom: 1px solid #555; padding-bottom: 8px; }
+    /* 店舗別サマリーカード */
+    .store-summary-card {
+      /* flex: 0 0 260px; */ /* 元の固定幅 */
+      flex: 0 0 80%; /* ビューポート幅基準に変更する場合 (画面サイズによる) */
+      max-width: 280px; /* 最大幅は維持 */
+      scroll-snap-align: start;
+      border: 1px solid #5a5a5a;
+      border-radius: 8px;
+      padding: 15px 20px;
+      background-color: #3c414d;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+      transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+      cursor: pointer;
+    }
+    .store-summary-card h3 { margin-top: 0; margin-bottom: 12px; font-size: 1.15em; border-bottom: 1px solid #555; padding-bottom: 8px; }
     .store-summary-card p { margin: 6px 0; font-size: 0.9em; color: #c0c0c0; }
     .store-summary-card p strong { margin-right: 5px; color: #dcdcdc; font-weight: 600; }
     .store-summary-card.selected-card { border-color: #41B883; box-shadow: 0 4px 10px rgba(65, 184, 131, 0.4); border-width: 2px; transform: translateY(-3px); }
+
+    /* グラフコンテナ */
     .chart-container { margin-top: 30px; max-width: 800px; margin-left: auto; margin-right: auto; position: relative; height: auto; min-height: 350px; background-color: #333842; padding: 10px 20px 10px 20px; border-radius: 4px; display: flex; flex-direction: column; }
-    .chart-container > :deep(div), .chart-container > *:last-child { flex-grow: 1; min-height: 300px; display: flex; align-items: stretch; }
+    .chart-container > :deep(div), .chart-container > *:last-child { flex-grow: 1; min-height: 300px; display: flex; align-items: stretch; } /* :deep() の使用例 */
+
+    /* 日報セクション */
     .filter-reset-button { margin-left: 10px; font-size: 0.8em; padding: 4px 8px; background-color: #555; border: none; }
     .filter-reset-button:hover { background-color: #666; }
     .report-list { display: flex; flex-direction: column; gap: 16px; margin-top: 15px; }
-    .report-card { border: 1px solid #5a5a5a; border-radius: 8px; padding: 16px; background-color: #3c414d; box-shadow: 0 2px 5px rgba(0,0,0,0.15); word-wrap: break-word; }
-    .report-card h3 { margin-top: 0; margin-bottom: 12px; font-size: 1.1em; border-bottom: 1px solid #555; padding-bottom: 8px; color: #a6c0fe; }
+    /* --- ▼▼▼ 日報カードのスタイルを変更 ▼▼▼ --- */
+    .report-card {
+      border: 1px solid #5a5a5a;
+      border-radius: 8px;
+      padding: 16px;
+      background-color: #3c414d;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+      word-wrap: break-word;
+      width: 90%; /* 横幅を90%に設定 */
+      margin-left: auto; /* 中央寄せ */
+      margin-right: auto; /* 中央寄せ */
+      max-width: 700px; /* 最大幅を設定（任意） */
+    }
+    /* --- ▲▲▲ 日報カードのスタイルを変更 ▲▲▲ --- */
+    .report-card h3 { margin-top: 0; margin-bottom: 12px; font-size: 1.1em; border-bottom: 1px solid #555; padding-bottom: 8px; }
     .report-card p { margin: 6px 0; font-size: 0.95em; line-height: 1.5; color: #c0c0c0; }
     .report-card p strong { color: #dcdcdc; margin-right: 5px; font-weight: 600; }
-    .report-card .comment-text { display: block; margin-top: 6px; white-space: pre-wrap; color: #b0b0b0; max-height: 120px; overflow-y: auto; background-color: #333842; padding: 8px 10px; border-radius: 4px; font-size: 0.9em; }
+    .report-card .comment-text { display: block; margin-top: 6px; white-space: pre-wrap; /* 改行を反映 */ color: #b0b0b0; max-height: 120px; overflow-y: auto; background-color: #333842; padding: 8px 10px; border-radius: 4px; font-size: 0.9em; }
     .report-card .comment-text::-webkit-scrollbar { width: 6px; }
     .report-card .comment-text::-webkit-scrollbar-thumb { background-color: #666; border-radius: 3px; }
     .report-card .comment-text::-webkit-scrollbar-track { background: #333842; border-radius: 3px; }
     .report-card .comment-text { scrollbar-width: thin; scrollbar-color: #666 #333842; }
     .report-card .report-meta { display: block; margin-top: 12px; font-size: 0.8em; color: #888; text-align: right; }
+
+    /* ログイン画面 */
     .login-container { padding: 30px 20px; max-width: 450px; margin: 60px auto; background-color: #333842; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
     .login-title { text-align: center; color: #eee; margin-bottom: 25px; }
     .login-form { max-width: 400px; margin: 0 auto; }
@@ -536,22 +682,55 @@ onUnmounted(() => {
     .form-group input:focus { outline: none; border-color: #41B883; background-color: #4a505c; }
     .login-button { width: 100%; padding: 12px 20px; font-size: 1.1em; margin-top: 10px; background-color: #41B883; border: none; color: white; }
     .login-button:hover:not(:disabled) { background-color: #36a476; }
-    .login-error { margin-top: 15px; text-align: center; font-weight: bold; }
-    .loading-container { text-align: center; padding: 60px 20px; color: #ccc; font-size: 1.1em; }
-    @media (max-width: 768px) { .chart-container { min-height: 300px; } .chart-container > :deep(div), .chart-container > *:last-child { min-height: 250px; } }
-    @media (max-width: 600px) { .user-info-bar { flex-direction: column; align-items: flex-end; } .user-email { width: 100%; text-align: left; margin-bottom: 8px; } .action-buttons { width: 100%; justify-content: flex-end; gap: 8px; } .section-header { flex-direction: column; align-items: flex-start; } .month-nav-buttons { margin-top: 10px; width: 100%; display: flex; justify-content: space-between; } .month-nav-buttons button { margin-left: 0; flex-grow: 1; margin: 0 4px; } .store-summary-slider { padding-left: 15px; padding-right: 15px; scroll-padding-left: 15px; scroll-padding-right: 15px; gap: 12px; } .store-summary-card { flex-basis: calc(80vw - 30px); padding: 12px 15px; } .report-card { border-radius: 4px; padding: 12px; } .report-card h3 { font-size: 1em; margin-bottom: 8px; padding-bottom: 6px; } .report-card p { font-size: 0.9em; } .report-card .comment-text { max-height: 100px; } .login-container { margin: 40px 15px; } }
+    .login-error { margin-top: 15px; text-align: center; font-weight: bold; } /* .error-message を継承 */
 
-    /* --- PullToRefreshの表示を調整する場合の例 (コメントアウト中) --- */
-    /* :deep(.ptr--ptr) { */
-      /* 他の要素より手前に表示する場合 */
-      /* z-index: 9999; */
-    /* } */
-    /* :deep(.ptr--icon) { */
+    /* 初期ローディング */
+    .loading-container { text-align: center; padding: 60px 20px; color: #ccc; font-size: 1.1em; }
+
+    /* レスポンシブ対応 */
+    @media (max-width: 768px) {
+      #app { padding: 0 10px; } /* スマホでは左右パディングを狭める */
+      .chart-container { min-height: 300px; }
+      .chart-container > :deep(div), .chart-container > *:last-child { min-height: 250px; }
+      .store-summary-card { flex-basis: 75%; max-width: 260px; } /* スライダーカードの幅調整 */
+      .report-card { width: 95%; } /* スマホではカード幅を少し広げる */
+    }
+    @media (max-width: 600px) {
+      .user-info-bar { flex-direction: column; align-items: stretch; /* stretch に変更してボタンを横幅いっぱいに */ }
+      .user-email { width: 100%; text-align: left; margin-bottom: 8px; }
+      .action-buttons { width: 100%; justify-content: space-between; /* ボタンを均等配置 */ gap: 8px; }
+      .action-buttons > button { flex-grow: 1; /* ボタンがスペースを埋めるように */ }
+      .section-header { flex-direction: column; align-items: flex-start; }
+      .month-nav-buttons { margin-top: 10px; width: 100%; display: flex; justify-content: space-between; }
+      .month-nav-buttons button { margin-left: 0; flex-grow: 1; margin: 0 4px; }
+      .store-summary-slider { padding-left: 5px; padding-right: 5px; scroll-padding: 0 5px; gap: 12px; margin: 15px -5px; }
+      .store-summary-card { flex-basis: calc(85vw - 20px); /* viewport width基準 */ padding: 12px 15px; }
+      .report-card { border-radius: 4px; padding: 12px; width: 95%; /* 維持 */ }
+      .report-card h3 { font-size: 1em; margin-bottom: 8px; padding-bottom: 6px; }
+      .report-card p { font-size: 0.9em; }
+      .report-card .comment-text { max-height: 100px; }
+      .login-container { margin: 40px 15px; }
+    }
+
+    /* --- ▼▼▼ PullToRefreshの表示を調整するCSSを追加 ▼▼▼ --- */
+    :deep(.ptr--ptr) {
+      /* 他の要素より手前に表示する (ヘッダーより上など) */
+      z-index: 9999 !important;
+      /* 必要に応じて背景色などを設定 */
+      /* background-color: rgba(40, 44, 52, 0.8); */
+    }
+    :deep(.ptr--box) {
+        /* アイコンとテキストのコンテナ */
+    }
+    :deep(.ptr--icon) {
       /* アイコンの色を変える場合 */
-      /* color: #4fc3f7; */
-    /* } */
-    /* :deep(.ptr--text) { */
+      /* color: #61dafb; */ /* 例: Reactの青色 */
+      color: #4fc3f7; /* 元のコメントにあった色 */
+    }
+    :deep(.ptr--text) {
       /* テキストの色を変える場合 */
-      /* color: #e0e0e0; */
-    /* } */
+      color: #e0e0e0;
+      /* font-size: 0.9em; */ /* 文字サイズ調整 */
+    }
+    /* --- ▲▲▲ PullToRefreshのCSSを追加 ▲▲▲ --- */
 </style>
