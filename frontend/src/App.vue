@@ -7,7 +7,7 @@ import StoreSalesChart from './components/StoreSalesChart.vue'; // グラフコ�
 import { auth } from './firebaseConfig'; // Firebase設定ファイルのパスを確認
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from "firebase/auth";
 
-// --- Notification Subscription Logic (元のまま) ---
+// --- Notification Subscription Logic (変更なし) ---
 const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
 const subscriptionStatus = ref('');
 
@@ -128,7 +128,7 @@ async function fetchApiData(year = displayYear.value, month = displayMonth.value
   isLoading.value = true;
   fetchError.value = null;
 
-  console.log(`Workspaceing data for ${year}-${month}...`); // Typo修正: Workspaceing -> Fetching
+  console.log(`Workspaceing data for ${year}-${month}...`); // Typo修正
   try {
     if (!currentUser.value) { throw new Error('ユーザーがログインしていません。'); }
     const idToken = await currentUser.value.getIdToken();
@@ -139,7 +139,7 @@ async function fetchApiData(year = displayYear.value, month = displayMonth.value
     if (!response.ok) {
       let errorMsg = `HTTP error! status: ${response.status}`;
       try { const errorData = await response.json(); errorMsg = errorData.error || errorMsg; } catch(e) { /* ignore */ }
-      if (response.status === 401 || response.status === 403) { errorMsg = `アクセス権エラー: ${errorMsg}`; await handleLogout(); } // await を追加 (ログアウト完了を待つ)
+      if (response.status === 401 || response.status === 403) { errorMsg = `アクセス権エラー: ${errorMsg}`; await handleLogout(); } // await を追加
       throw new Error(errorMsg);
     }
     const data = await response.json();
@@ -155,7 +155,6 @@ async function fetchApiData(year = displayYear.value, month = displayMonth.value
   } catch (error) {
     console.error('Error fetching data:', error);
     fetchError.value = `データ取得に失敗: ${error.message}`;
-    // エラー時もクリア
     reports.value = []; storesSummaryData.value = {}; summaryLastUpdatedData.value = null; selectedStore.value = null;
   } finally {
     isLoading.value = false;
@@ -229,12 +228,9 @@ async function handleLogin() {
 }
 
 async function handleLogout() {
-  // ▼▼▼ PullToRefresh 破棄処理を追加 ▼▼▼
-  destroyPullToRefresh();
-  // ▲▲▲ PullToRefresh 破棄処理を追加 ▲▲▲
+  destroyPullToRefresh(); // PullToRefresh 破棄
   try {
     await signOut(auth);
-    // ログアウト後のデータクリアは onAuthStateChanged で行う
   } catch (error) {
     console.error("Logout failed:", error);
   }
@@ -260,37 +256,30 @@ const isNextMonthDisabled = computed(() => {
 });
 
 
-// --- ▼▼▼ PullToRefresh 関連の追加 ▼▼▼ ---
-let ptrInstance = null; // インスタンス保持用
+// --- PullToRefresh 関連 (変更なし) ---
+let ptrInstance = null;
 
 function initializePullToRefresh() {
-  if (ptrInstance) return; // 既に初期化済みなら何もしない
-  // 念のため、タッチデバイスかどうかを簡易的に判定 (任意)
-  // if (!('ontouchstart' in window || navigator.maxTouchPoints > 0 || navigator.msMaxTouchPoints > 0)) {
-  //   console.log('PullToRefresh: Not a touch device, skipping initialization.');
-  //   return;
-  // }
+  if (ptrInstance) return;
   try {
     ptrInstance = PullToRefresh.init({
-      mainElement: 'body', // スクロールされる主要な要素
-      triggerElement: 'body', // この要素が一番上にある時に引っ張れる
-      shouldPullToRefresh: () => !isLoading.value, // ローディング中でない時だけ許可
+      mainElement: 'body',
+      triggerElement: 'body',
+      shouldPullToRefresh: () => !isLoading.value,
       onRefresh: async () => {
         console.log('PullToRefresh: Refresh triggered!');
-        // 現在表示している年月のデータを再取得
         await fetchApiData(displayYear.value, displayMonth.value);
         console.log('PullToRefresh: fetchApiData finished.');
       },
-      // 日本語テキスト設定 (任意)
       instructionsPullToRefresh: '下にスワイプして更新',
       instructionsReleaseToRefresh: '指を離して更新',
       instructionsRefreshing: '更新中...',
-      // haptics: true, // iOSで軽い振動 (任意)
+      // haptics: true,
     });
     console.log('PullToRefresh initialized.');
   } catch (error) {
     console.error('PullToRefresh initialization failed:', error);
-    ptrInstance = null; // 失敗したら null に戻す
+    ptrInstance = null;
   }
 }
 
@@ -301,26 +290,21 @@ function destroyPullToRefresh() {
     console.log('PullToRefresh instance destroyed.');
   }
 }
-// --- ▲▲▲ PullToRefresh 関連の追加 ▲▲▲ ---
+// --- PullToRefresh 関連 ここまで ---
 
 
 onMounted(() => {
   registerServiceWorker(); // Service Worker 登録
-
-  // 認証状態の監視
   onAuthStateChanged(auth, (user) => {
     currentUser.value = user;
     if (user) {
       console.log('User logged in:', user.email);
-      // ログイン直後にすぐデータを取得 & PTR初期化
       fetchApiData();
-      // 少し遅延させてPTR初期化 (DOMレンダリング後の方が確実な場合)
-      // setTimeout(initializePullToRefresh, 100);
       initializePullToRefresh(); // ★ ログインしたらPullToRefreshを初期化
     } else {
       console.log('User logged out or not logged in.');
       destroyPullToRefresh(); // ★ ログアウトしたらPullToRefreshを破棄
-      // ログアウト時のデータクリア処理
+      // データクリア処理 (既存)
       reports.value = [];
       storesSummaryData.value = {};
       summaryLastUpdatedData.value = null;
@@ -332,7 +316,6 @@ onMounted(() => {
       subscriptionStatus.value = '';
       isLoading.value = false; // ログアウト時はローディング解除
     }
-    // isLoading.value = false; // fetchApiDataのfinallyで制御されるため、ここでは不要かも
   });
 });
 
@@ -463,86 +446,106 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-  /* style scoped の内容は元のまま変更なし */
-  body { font-family: sans-serif; margin: 0; background-color: #282c34; color: #e0e0e0; }
-  button { padding: 8px 16px; font-size: 0.95em; cursor: pointer; border-radius: 4px; border: 1px solid #666; background-color: #444; color: #eee; transition: background-color 0.2s ease, border-color 0.2s ease; margin: 0; }
-  button:hover:not(:disabled) { background-color: #555; border-color: #777; }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  hr { margin: 30px 0; border: 0; border-top: 1px solid #555; }
-  h1, h2 { color: #E0E0E0; margin-top: 0; margin-bottom: 0.8em; }
-  h4 { color: #D0D0D0; margin-bottom: 10px; text-align: center; }
-  p { margin-top: 0; margin-bottom: 0.8em; line-height: 1.6; }
-  small { font-size: 0.85em; color: #bbb; }
-  .user-info-bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 15px; background-color: #3a3f4a; margin-bottom: 20px; border-radius: 4px; flex-wrap: wrap; gap: 10px; }
-  .user-email { color: #eee; white-space: nowrap; flex-shrink: 0; font-size: 0.9em; }
-  .action-buttons { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; flex-grow: 1; }
-  .action-button { font-size: 0.9em; padding: 6px 12px; }
-  .logout-button { background-color: #d9534f; border-color: #d43f3a; color: white; }
-  .logout-button:hover:not(:disabled) { background-color: #c9302c; border-color: #ac2925; }
-  .subscription-status { text-align: right; margin-top: -15px; margin-bottom: 15px; font-size: 0.85em; color: #aaa; }
-  .main-title { text-align: center; margin-bottom: 15px; }
-  .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px; }
-  .section-header h2 { margin-bottom: 0; }
-  .month-nav-buttons button { margin-left: 8px; padding: 6px 12px; font-size: 0.9em; }
-  .loading-message, .no-data-message, .error-message { padding: 15px; margin-top: 15px; border-radius: 4px; text-align: center; }
-  .loading-message { color: #ccc; }
-  .no-data-message { color: #aaa; background-color: rgba(85, 85, 85, 0.2); }
-  .error-message { color: #ff8a8a; background-color: rgba(255, 107, 107, 0.1); border: 1px solid rgba(255, 107, 107, 0.3); }
-  .overall-summary { margin-bottom: 20px; padding: 15px; background-color: #333842; border-radius: 4px; }
-  .overall-summary p { margin-bottom: 6px; }
-  .overall-summary p:last-child { margin-bottom: 0; }
-  .overall-summary strong { color: #b8c5d6; }
-  .store-summary-slider { display: flex; overflow-x: auto; padding: 5px 20px 20px 20px; margin: 15px 0; scroll-snap-type: x mandatory; gap: 16px; -webkit-overflow-scrolling: touch; scroll-padding-left: 20px; scroll-padding-right: 20px; }
-  .store-summary-slider::-webkit-scrollbar { height: 10px; }
-  .store-summary-slider::-webkit-scrollbar-track { background: rgba(68, 68, 68, 0.5); border-radius: 5px; }
-  .store-summary-slider::-webkit-scrollbar-thumb { background-color: #777; border-radius: 5px; border: 2px solid rgba(68, 68, 68, 0.5); }
-  .store-summary-slider::-webkit-scrollbar-thumb:hover { background-color: #999; }
-  .store-summary-slider { scrollbar-width: thin; scrollbar-color: #777 rgba(68, 68, 68, 0.5); }
-  .store-summary-card { flex: 0 0 260px; scroll-snap-align: start; border: 1px solid #5a5a5a; border-radius: 8px; padding: 15px 20px; background-color: #3c414d; box-shadow: 0 2px 4px rgba(0,0,0,0.2); transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease; cursor: pointer; }
-  .store-summary-card h3 { margin-top: 0; margin-bottom: 12px; font-size: 1.15em; color: #a6c0fe; border-bottom: 1px solid #555; padding-bottom: 8px; }
-  .store-summary-card p { margin: 6px 0; font-size: 0.9em; color: #c0c0c0; }
-  .store-summary-card p strong { margin-right: 5px; color: #dcdcdc; font-weight: 600; }
-  .store-summary-card.selected-card { border-color: #41B883; box-shadow: 0 4px 10px rgba(65, 184, 131, 0.4); border-width: 2px; transform: translateY(-3px); }
-  .chart-container { margin-top: 30px; max-width: 800px; margin-left: auto; margin-right: auto; position: relative; height: auto; min-height: 350px; background-color: #333842; padding: 10px 20px 10px 20px; border-radius: 4px; display: flex; flex-direction: column; }
-  .chart-container > :deep(div), .chart-container > *:last-child { flex-grow: 1; min-height: 300px; display: flex; align-items: stretch; }
-  .filter-reset-button { margin-left: 10px; font-size: 0.8em; padding: 4px 8px; background-color: #555; border: none; }
-  .filter-reset-button:hover { background-color: #666; }
-  .report-list { display: flex; flex-direction: column; gap: 16px; margin-top: 15px; }
-  .report-card { border: 1px solid #5a5a5a; border-radius: 8px; padding: 16px; background-color: #3c414d; box-shadow: 0 2px 5px rgba(0,0,0,0.15); word-wrap: break-word; }
-  .report-card h3 { margin-top: 0; margin-bottom: 12px; font-size: 1.1em; border-bottom: 1px solid #555; padding-bottom: 8px; color: #a6c0fe; }
-  .report-card p { margin: 6px 0; font-size: 0.95em; line-height: 1.5; color: #c0c0c0; }
-  .report-card p strong { color: #dcdcdc; margin-right: 5px; font-weight: 600; }
-  .report-card .comment-text { display: block; margin-top: 6px; white-space: pre-wrap; color: #b0b0b0; max-height: 120px; overflow-y: auto; background-color: #333842; padding: 8px 10px; border-radius: 4px; font-size: 0.9em; }
-  .report-card .comment-text::-webkit-scrollbar { width: 6px; }
-  .report-card .comment-text::-webkit-scrollbar-thumb { background-color: #666; border-radius: 3px; }
-  .report-card .comment-text::-webkit-scrollbar-track { background: #333842; border-radius: 3px; }
-  .report-card .comment-text { scrollbar-width: thin; scrollbar-color: #666 #333842; }
-  .report-card .report-meta { display: block; margin-top: 12px; font-size: 0.8em; color: #888; text-align: right; }
-  .login-container { padding: 30px 20px; max-width: 450px; margin: 60px auto; background-color: #333842; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
-  .login-title { text-align: center; color: #eee; margin-bottom: 25px; }
-  .login-form { max-width: 400px; margin: 0 auto; }
-  .form-group { margin-bottom: 20px; }
-  .form-group label { display: block; margin-bottom: 8px; color: #ccc; font-weight: bold; font-size: 0.9em; }
-  .form-group input { width: 100%; padding: 12px 15px; box-sizing: border-box; border: 1px solid #555; background-color: #444954; color: #eee; border-radius: 4px; font-size: 1em; transition: border-color 0.2s ease, background-color 0.2s ease; }
-  .form-group input:focus { outline: none; border-color: #41B883; background-color: #4a505c; }
-  .login-button { width: 100%; padding: 12px 20px; font-size: 1.1em; margin-top: 10px; background-color: #41B883; border: none; color: white; }
-  .login-button:hover:not(:disabled) { background-color: #36a476; }
-  .login-error { margin-top: 15px; text-align: center; font-weight: bold; }
-  .loading-container { text-align: center; padding: 60px 20px; color: #ccc; font-size: 1.1em; }
-  @media (max-width: 768px) { .chart-container { min-height: 300px; } .chart-container > :deep(div), .chart-container > *:last-child { min-height: 250px; } }
-  @media (max-width: 600px) { .user-info-bar { flex-direction: column; align-items: flex-end; } .user-email { width: 100%; text-align: left; margin-bottom: 8px; } .action-buttons { width: 100%; justify-content: flex-end; gap: 8px; } .section-header { flex-direction: column; align-items: flex-start; } .month-nav-buttons { margin-top: 10px; width: 100%; display: flex; justify-content: space-between; } .month-nav-buttons button { margin-left: 0; flex-grow: 1; margin: 0 4px; } .store-summary-slider { padding-left: 15px; padding-right: 15px; scroll-padding-left: 15px; scroll-padding-right: 15px; gap: 12px; } .store-summary-card { flex-basis: calc(80vw - 30px); padding: 12px 15px; } .report-card { border-radius: 4px; padding: 12px; } .report-card h3 { font-size: 1em; margin-bottom: 8px; padding-bottom: 6px; } .report-card p { font-size: 0.9em; } .report-card .comment-text { max-height: 100px; } .login-container { margin: 40px 15px; } }
+    /* --- ▼▼▼ #app の padding を打ち消す CSS を追加 ▼▼▼ --- */
+    :global(#app) {
+      padding-left: 0 !important;
+      padding-right: 0 !important;
+      box-sizing: border-box;
+    }
+    /* --- ▲▲▲ CSS を追加 ▲▲▲ --- */
 
-  /* --- ▼▼▼ PullToRefreshの表示を調整する場合の例 (コメントアウト中) ▼▼▼ --- */
-  /* :deep(.ptr--ptr) { */
-    /* 他の要素より手前に表示する場合 */
-    /* z-index: 9999; */
-  /* } */
-  /* :deep(.ptr--icon) { */
-    /* アイコンの色を変える場合 */
-    /* color: #4fc3f7; */
-  /* } */
-  /* :deep(.ptr--text) { */
-    /* テキストの色を変える場合 */
-    /* color: #e0e0e0; */
-  /* } */
+    /* 基本スタイル (変更なし) */
+    body { font-family: sans-serif; margin: 0; background-color: #282c34; color: #e0e0e0; }
+    button { padding: 8px 16px; font-size: 0.95em; cursor: pointer; border-radius: 4px; border: 1px solid #666; background-color: #444; color: #eee; transition: background-color 0.2s ease, border-color 0.2s ease; margin: 0; }
+    button:hover:not(:disabled) { background-color: #555; border-color: #777; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    hr { margin: 30px 0; border: 0; border-top: 1px solid #555; }
+    h1, h2 { color: #E0E0E0; margin-top: 0; margin-bottom: 0.8em; }
+    h4 { color: #D0D0D0; margin-bottom: 10px; text-align: center; }
+    p { margin-top: 0; margin-bottom: 0.8em; line-height: 1.6; }
+    small { font-size: 0.85em; color: #bbb; }
+
+    /* レイアウト & コンポーネント (変更なし) */
+    .user-info-bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 15px; background-color: #3a3f4a; margin-bottom: 20px; border-radius: 4px; flex-wrap: wrap; gap: 10px; }
+    .user-email { color: #eee; white-space: nowrap; flex-shrink: 0; font-size: 0.9em; }
+    .action-buttons { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; flex-grow: 1; }
+    .action-button { font-size: 0.9em; padding: 6px 12px; }
+    .logout-button { background-color: #d9534f; border-color: #d43f3a; color: white; }
+    .logout-button:hover:not(:disabled) { background-color: #c9302c; border-color: #ac2925; }
+    .subscription-status { text-align: right; margin-top: -15px; margin-bottom: 15px; font-size: 0.85em; color: #aaa; }
+    .main-title { text-align: center; margin-bottom: 15px; }
+    .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px; }
+    .section-header h2 { margin-bottom: 0; }
+    .month-nav-buttons button { margin-left: 8px; padding: 6px 12px; font-size: 0.9em; }
+    .loading-message, .no-data-message, .error-message { padding: 15px; margin-top: 15px; border-radius: 4px; text-align: center; }
+    .loading-message { color: #ccc; }
+    .no-data-message { color: #aaa; background-color: rgba(85, 85, 85, 0.2); }
+    .error-message { color: #ff8a8a; background-color: rgba(255, 107, 107, 0.1); border: 1px solid rgba(255, 107, 107, 0.3); }
+    .overall-summary { margin-bottom: 20px; padding: 15px; background-color: #333842; border-radius: 4px; }
+    .overall-summary p { margin-bottom: 6px; }
+    .overall-summary p:last-child { margin-bottom: 0; }
+    .overall-summary strong { color: #b8c5d6; }
+
+    /* 横スライダースタイル (変更なし) */
+    .store-summary-slider { display: flex; overflow-x: auto; padding: 5px 20px 20px 20px; margin: 15px 0; scroll-snap-type: x mandatory; gap: 16px; -webkit-overflow-scrolling: touch; scroll-padding-left: 20px; scroll-padding-right: 20px; }
+    .store-summary-slider::-webkit-scrollbar { height: 10px; }
+    .store-summary-slider::-webkit-scrollbar-track { background: rgba(68, 68, 68, 0.5); border-radius: 5px; }
+    .store-summary-slider::-webkit-scrollbar-thumb { background-color: #777; border-radius: 5px; border: 2px solid rgba(68, 68, 68, 0.5); }
+    .store-summary-slider::-webkit-scrollbar-thumb:hover { background-color: #999; }
+    .store-summary-slider { scrollbar-width: thin; scrollbar-color: #777 rgba(68, 68, 68, 0.5); }
+    .store-summary-card { flex: 0 0 260px; scroll-snap-align: start; border: 1px solid #5a5a5a; border-radius: 8px; padding: 15px 20px; background-color: #3c414d; box-shadow: 0 2px 4px rgba(0,0,0,0.2); transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease; cursor: pointer; }
+    .store-summary-card h3 { margin-top: 0; margin-bottom: 12px; font-size: 1.15em; color: #a6c0fe; border-bottom: 1px solid #555; padding-bottom: 8px; }
+    .store-summary-card p { margin: 6px 0; font-size: 0.9em; color: #c0c0c0; }
+    .store-summary-card p strong { margin-right: 5px; color: #dcdcdc; font-weight: 600; }
+    .store-summary-card.selected-card { border-color: #41B883; box-shadow: 0 4px 10px rgba(65, 184, 131, 0.4); border-width: 2px; transform: translateY(-3px); }
+
+    /* グラフコンテナのスタイル (変更なし) */
+    .chart-container { margin-top: 30px; max-width: 800px; margin-left: auto; margin-right: auto; position: relative; height: auto; min-height: 350px; background-color: #333842; padding: 10px 20px 10px 20px; border-radius: 4px; display: flex; flex-direction: column; }
+    .chart-container > :deep(div), .chart-container > *:last-child { flex-grow: 1; min-height: 300px; display: flex; align-items: stretch; }
+
+    /* レポートリスト関連のスタイル (変更なし) */
+    .filter-reset-button { margin-left: 10px; font-size: 0.8em; padding: 4px 8px; background-color: #555; border: none; }
+    .filter-reset-button:hover { background-color: #666; }
+    .report-list { display: flex; flex-direction: column; gap: 16px; margin-top: 15px; }
+    .report-card { border: 1px solid #5a5a5a; border-radius: 8px; padding: 16px; background-color: #3c414d; box-shadow: 0 2px 5px rgba(0,0,0,0.15); word-wrap: break-word; }
+    .report-card h3 { margin-top: 0; margin-bottom: 12px; font-size: 1.1em; border-bottom: 1px solid #555; padding-bottom: 8px; color: #a6c0fe; }
+    .report-card p { margin: 6px 0; font-size: 0.95em; line-height: 1.5; color: #c0c0c0; }
+    .report-card p strong { color: #dcdcdc; margin-right: 5px; font-weight: 600; }
+    .report-card .comment-text { display: block; margin-top: 6px; white-space: pre-wrap; color: #b0b0b0; max-height: 120px; overflow-y: auto; background-color: #333842; padding: 8px 10px; border-radius: 4px; font-size: 0.9em; }
+    .report-card .comment-text::-webkit-scrollbar { width: 6px; }
+    .report-card .comment-text::-webkit-scrollbar-thumb { background-color: #666; border-radius: 3px; }
+    .report-card .comment-text::-webkit-scrollbar-track { background: #333842; border-radius: 3px; }
+    .report-card .comment-text { scrollbar-width: thin; scrollbar-color: #666 #333842; }
+    .report-card .report-meta { display: block; margin-top: 12px; font-size: 0.8em; color: #888; text-align: right; }
+
+    /* ログイン画面 (変更なし) */
+    .login-container { padding: 30px 20px; max-width: 450px; margin: 60px auto; background-color: #333842; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+    .login-title { text-align: center; color: #eee; margin-bottom: 25px; }
+    .login-form { max-width: 400px; margin: 0 auto; }
+    .form-group { margin-bottom: 20px; }
+    .form-group label { display: block; margin-bottom: 8px; color: #ccc; font-weight: bold; font-size: 0.9em; }
+    .form-group input { width: 100%; padding: 12px 15px; box-sizing: border-box; border: 1px solid #555; background-color: #444954; color: #eee; border-radius: 4px; font-size: 1em; transition: border-color 0.2s ease, background-color 0.2s ease; }
+    .form-group input:focus { outline: none; border-color: #41B883; background-color: #4a505c; }
+    .login-button { width: 100%; padding: 12px 20px; font-size: 1.1em; margin-top: 10px; background-color: #41B883; border: none; color: white; }
+    .login-button:hover:not(:disabled) { background-color: #36a476; }
+    .login-error { margin-top: 15px; text-align: center; font-weight: bold; }
+    .loading-container { text-align: center; padding: 60px 20px; color: #ccc; font-size: 1.1em; }
+
+    /* レスポンシブ (変更なし) */
+    @media (max-width: 768px) { .chart-container { min-height: 300px; } .chart-container > :deep(div), .chart-container > *:last-child { min-height: 250px; } }
+    @media (max-width: 600px) { .user-info-bar { flex-direction: column; align-items: flex-end; } .user-email { width: 100%; text-align: left; margin-bottom: 8px; } .action-buttons { width: 100%; justify-content: flex-end; gap: 8px; } .section-header { flex-direction: column; align-items: flex-start; } .month-nav-buttons { margin-top: 10px; width: 100%; display: flex; justify-content: space-between; } .month-nav-buttons button { margin-left: 0; flex-grow: 1; margin: 0 4px; } .store-summary-slider { padding-left: 15px; padding-right: 15px; scroll-padding-left: 15px; scroll-padding-right: 15px; gap: 12px; } .store-summary-card { flex-basis: calc(80vw - 30px); padding: 12px 15px; } .report-card { border-radius: 4px; padding: 12px; } .report-card h3 { font-size: 1em; margin-bottom: 8px; padding-bottom: 6px; } .report-card p { font-size: 0.9em; } .report-card .comment-text { max-height: 100px; } .login-container { margin: 40px 15px; } }
+
+    /* --- PullToRefreshの表示を調整する場合の例 (コメントアウト中) --- */
+    /* :deep(.ptr--ptr) { */
+      /* 他の要素より手前に表示する場合 */
+      /* z-index: 9999; */
+    /* } */
+    /* :deep(.ptr--icon) { */
+      /* アイコンの色を変える場合 */
+      /* color: #4fc3f7; */
+    /* } */
+    /* :deep(.ptr--text) { */
+      /* テキストの色を変える場合 */
+      /* color: #e0e0e0; */
+    /* } */
 </style>
