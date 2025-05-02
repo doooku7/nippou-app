@@ -608,25 +608,41 @@ onMounted(() => {
     .no-data-message { color: #aaa; background-color: rgba(85, 85, 85, 0.2); }
     .error-message { color: #ffcaca; background-color: rgba(217, 83, 79, 0.2); border: 1px solid rgba(217, 83, 79, 0.4); font-weight: bold; }
 
-    /* 全体サマリー */
+    /* 全体サマリー (変更なし) */
     .overall-summary { margin-bottom: 20px; padding: 15px; background-color: #333842; border-radius: 4px; }
     .overall-summary p { margin-bottom: 6px; }
     .overall-summary p:last-child { margin-bottom: 0; }
     .overall-summary strong { color: #b8c5d6; }
 
     /* 店舗別サマリースライダー */
-    .store-summary-slider { display: flex; overflow-x: auto; padding: 5px 5px 20px 5px; /* 左右パディング少し減らす */ margin: 15px -5px; /* ネガティブマージンで左右に広げる */ scroll-snap-type: x mandatory; gap: 16px; -webkit-overflow-scrolling: touch; scroll-padding: 0 5px; /* スナップ位置調整 */ }
+    .store-summary-slider {
+      display: flex;
+      overflow-x: auto;
+      /* 左右のpaddingを増やして、左右のカードが見えるスペースを作る */
+      padding: 5px 30px 20px 30px; /* 左右パディングを30pxに */
+      margin: 15px 0; /* ネガティブマージンをやめて通常のmarginに */
+      scroll-snap-type: x mandatory;
+      gap: 16px; /* カード間の間隔 */
+      -webkit-overflow-scrolling: touch;
+      /* スナップ位置をpaddingに合わせて調整 */
+      scroll-padding: 0 30px; /* 左右paddingと同じ値に */
+      /* スクロールバーのスタイルは変更なし */
+    }
     .store-summary-slider::-webkit-scrollbar { height: 10px; }
     .store-summary-slider::-webkit-scrollbar-track { background: rgba(68, 68, 68, 0.5); border-radius: 5px; }
     .store-summary-slider::-webkit-scrollbar-thumb { background-color: #777; border-radius: 5px; border: 2px solid rgba(68, 68, 68, 0.5); }
     .store-summary-slider::-webkit-scrollbar-thumb:hover { background-color: #999; }
+    /* Firefox用スクロールバー */
     .store-summary-slider { scrollbar-width: thin; scrollbar-color: #777 rgba(68, 68, 68, 0.5); }
+
     /* 店舗別サマリーカード */
     .store-summary-card {
-      /* flex: 0 0 260px; */ /* 元の固定幅 */
-      flex: 0 0 80%; /* ビューポート幅基準に変更する場合 (画面サイズによる) */
-      max-width: 280px; /* 最大幅は維持 */
-      scroll-snap-align: start;
+      /* カード幅を固定値に変更 */
+      flex: 0 0 300px; /* 基本幅を300pxに */
+      max-width: 300px; /* 最大幅も合わせる */
+      /* スナップ位置: 'start' で左端揃え、'center' で中央揃え */
+      scroll-snap-align: start; /* または center */
+      /* 以下、元のスタイルを維持 */
       border: 1px solid #5a5a5a;
       border-radius: 8px;
       padding: 15px 20px;
@@ -635,15 +651,16 @@ onMounted(() => {
       transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
       cursor: pointer;
     }
+    /* カード内の要素スタイル (変更なし) */
     .store-summary-card h3 { margin-top: 0; margin-bottom: 12px; font-size: 1.15em; border-bottom: 1px solid #555; padding-bottom: 8px; }
     .store-summary-card p { margin: 6px 0; font-size: 0.9em; color: #c0c0c0; }
     .store-summary-card p strong { margin-right: 5px; color: #dcdcdc; font-weight: 600; }
+    /* 選択中カードのスタイル (変更なし) */
     .store-summary-card.selected-card { border-color: #41B883; box-shadow: 0 4px 10px rgba(65, 184, 131, 0.4); border-width: 2px; transform: translateY(-3px); }
 
-    /* グラフコンテナ */
+    /* グラフコンテナ (変更なし) */
     .chart-container { margin-top: 30px; max-width: 800px; margin-left: auto; margin-right: auto; position: relative; height: auto; min-height: 350px; background-color: #333842; padding: 10px 20px 10px 20px; border-radius: 4px; display: flex; flex-direction: column; }
-    .chart-container > :deep(div), .chart-container > *:last-child { flex-grow: 1; min-height: 300px; display: flex; align-items: stretch; } /* :deep() の使用例 */
-
+    .chart-container > :deep(div), .chart-container > *:last-child { flex-grow: 1; min-height: 300px; display: flex; align-items: stretch; }
     /* 日報セクション */
     .filter-reset-button { margin-left: 10px; font-size: 0.8em; padding: 4px 8px; background-color: #555; border: none; }
     .filter-reset-button:hover { background-color: #666; }
