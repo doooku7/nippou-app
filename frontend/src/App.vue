@@ -641,7 +641,7 @@ onMounted(() => {
       flex: 0 0 300px; /* 基本幅を300pxに */
       max-width: 300px; /* 最大幅も合わせる */
       /* スナップ位置: 'start' で左端揃え、'center' で中央揃え */
-      scroll-snap-align: start; /* または center */
+      scroll-snap-align: center; /* または center */
       /* 以下、元のスタイルを維持 */
       border: 1px solid #5a5a5a;
       border-radius: 8px;
