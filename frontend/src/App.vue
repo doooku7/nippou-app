@@ -338,7 +338,7 @@ function initializePullToRefresh() {
       instructionsRefreshing: '更新中...',
 
       // ★ トリガー距離（感度）の設定例 ★
-      distThreshold: 75, // 更新が始まるまでの距離 (デフォルト60より少し鈍く)
+      distThreshold: 90, // 更新が始まるまでの距離 (デフォルト60より少し鈍く)
       distMax: 100,       // 最大引き下げ距離 (デフォルト80より少し伸ばす)
       // distReload: 50,   // 更新開始後の戻り距離 (デフォルトのまま)
 
@@ -715,6 +715,6 @@ onMounted(() => {
       color: #4fc3f7;
     }
     :deep(.ptr--text) {
-      color: #e0e0e0;
+      color: #ffffff;
     }
 </style>
