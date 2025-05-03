@@ -338,8 +338,8 @@ function initializePullToRefresh() {
       instructionsRefreshing: '更新中...',
 
       // ★ トリガー距離（感度）の設定例 ★
-      distThreshold: 70, // 更新が始まるまでの距離 (デフォルト60より少し鈍く)
-      distMax: 90,       // 最大引き下げ距離 (デフォルト80より少し伸ばす)
+      distThreshold: 75, // 更新が始まるまでの距離 (デフォルト60より少し鈍く)
+      distMax: 100,       // 最大引き下げ距離 (デフォルト80より少し伸ばす)
       // distReload: 50,   // 更新開始後の戻り距離 (デフォルトのまま)
 
       // 他のオプション (変更なし)
